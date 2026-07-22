@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_constants.dart';
+import '../../../../core/theme/app_colors.dart';
 
 class PrivacyPolicyScreen extends StatelessWidget {
   const PrivacyPolicyScreen({super.key});
@@ -58,21 +60,46 @@ class PrivacyPolicyScreen extends StatelessWidget {
           const SizedBox(height: 16),
           Text('Contact', style: h),
           const SizedBox(height: 6),
-          Text(
-            'Questions? Email ${AppConstants.supportEmail}. The full policy is available at '
-            '${AppConstants.privacyPolicyUrl}.',
-            style: b,
+          Text('Questions or requests about your privacy?', style: b),
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 40),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: AppColors.primary,
+              ),
+              icon: const Icon(Icons.email_outlined, size: 20),
+              label: const Text(AppConstants.supportEmail),
+              onPressed: () => _launch(
+                'mailto:${AppConstants.supportEmail}'
+                '?subject=${Uri.encodeComponent('ClassTrack privacy')}',
+              ),
+            ),
           ),
-          const SizedBox(height: 24),
-          Text(
-            'Note: replace this text and the hosted URL with your finalised policy before publishing.',
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontStyle: FontStyle.italic,
-              color: theme.hintColor,
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(0, 40),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: AppColors.primary,
+              ),
+              icon: const Icon(Icons.open_in_new_rounded, size: 20),
+              label: const Text('Read the full privacy policy online'),
+              onPressed: () => _launch(AppConstants.privacyPolicyUrl),
             ),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _launch(String url) async {
+    final uri = Uri.parse(url);
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 }
