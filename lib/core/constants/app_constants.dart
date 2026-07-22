@@ -52,10 +52,15 @@ class AppConstants {
   // Gemini
   static const String geminiModel = 'gemini-2.0-flash';
 
-  // Privacy policy (host your own before publishing)
-  static const String privacyPolicyUrl =
-      'https://classtrack.app/privacy';
-  static const String supportEmail = 'support@classtrack.app';
+  // Website & legal (hosted pages)
+  static const String websiteUrl = 'https://classtracks.app/';
+  static const String privacyPolicyUrl = 'https://classtracks.app/privacy/';
+  static const String termsUrl = 'https://classtracks.app/terms/';
+  static const String supportUrl = 'https://classtracks.app/support/';
+
+  // Contact
+  static const String supportEmail = 'support@classtracks.app';
+  static const String contactEmail = 'piyush@classtracks.app';
 
   // Store links
   static const String androidPackage = 'com.classtrack.app';

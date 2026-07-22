@@ -268,6 +268,24 @@ class SettingsScreen extends ConsumerWidget {
                 const Divider(height: 1),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.description_outlined,
+                      color: AppColors.primary),
+                  title: const Text('Terms of service'),
+                  trailing: const Icon(Icons.open_in_new_rounded),
+                  onTap: () => _openUrl(AppConstants.termsUrl),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.help_outline_rounded,
+                      color: AppColors.primary),
+                  title: const Text('Help & support'),
+                  trailing: const Icon(Icons.open_in_new_rounded),
+                  onTap: () => _openUrl(AppConstants.supportUrl),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
                   leading: Icon(PhosphorIcons.info(), color: AppColors.primary),
                   title: const Text('Version'),
                   trailing: const Text('1.0.0'),
@@ -751,6 +769,10 @@ class SettingsScreen extends ConsumerWidget {
   Future<void> _manageSubscription() async {
     await launchUrl(Uri.parse(AppConstants.manageSubscriptionsUrl),
         mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _openUrl(String url) async {
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
   }
 
   Future<void> _restorePurchases(BuildContext context, WidgetRef ref) async {

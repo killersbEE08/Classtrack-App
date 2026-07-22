@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:purchases_flutter/purchases_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../data/subscription_service.dart';
 import '../../domain/pro_constants.dart';
@@ -117,6 +119,10 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
     }
   }
 
+  Future<void> _openUrl(String url) async {
+    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -219,6 +225,23 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
               textAlign: TextAlign.center,
               style:
                   theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton(
+                  onPressed: () => _openUrl(AppConstants.termsUrl),
+                  child: const Text('Terms of Service'),
+                ),
+                Text('•',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: theme.hintColor)),
+                TextButton(
+                  onPressed: () => _openUrl(AppConstants.privacyPolicyUrl),
+                  child: const Text('Privacy Policy'),
+                ),
+              ],
             ),
           ],
         ),
