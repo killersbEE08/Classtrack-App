@@ -30,7 +30,7 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final profile = ref.watch(userProfileProvider).valueOrNull;
-    final themeMode = ref.watch(themeModeProvider);
+    final isPro = ref.watch(isProProvider);
     final target =
         profile?.targetAttendancePercent ?? AppConstants.defaultTargetAttendance;
     final lead = ref.watch(reminderLeadProvider);
@@ -40,7 +40,7 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _profileHeader(theme, profile?.displayName, profile?.email),
+          _profileHeader(theme, profile?.displayName, profile?.email, isPro),
           const SizedBox(height: 16),
           _sectionLabel(theme, 'ClassTrack Pro'),
           _proCard(context, ref, theme),
@@ -170,27 +170,7 @@ class SettingsScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 16),
           _sectionLabel(theme, 'Appearance'),
-          _card(
-            theme,
-            child: Column(
-              children: ThemeMode.values.map((mode) {
-                return RadioListTile<ThemeMode>(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(switch (mode) {
-                    ThemeMode.system => 'System default',
-                    ThemeMode.light => 'Light',
-                    ThemeMode.dark => 'Dark',
-                  }),
-                  value: mode,
-                  groupValue: themeMode,
-                  onChanged: (m) =>
-                      ref.read(themeModeProvider.notifier).set(m!),
-                );
-              }).toList(),
-            ),
-          ),
-          const SizedBox(height: 8),
-          _accentCard(context, ref, theme),
+          _appearanceCard(context, ref, theme),
           const SizedBox(height: 16),
           _sectionLabel(theme, 'Notifications'),
           _card(
@@ -389,7 +369,8 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  Widget _profileHeader(ThemeData theme, String? name, String? email) {
+  Widget _profileHeader(
+      ThemeData theme, String? name, String? email, bool isPro) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -401,7 +382,7 @@ class SettingsScreen extends ConsumerWidget {
         borderRadius: BorderRadius.circular(24),
         boxShadow: [
           BoxShadow(
-            color: AppColors.primary.withOpacity(0.30),
+            color: AppColors.primary.withValues(alpha: 0.30),
             blurRadius: 20,
             offset: const Offset(0, 10),
           ),
@@ -413,7 +394,7 @@ class SettingsScreen extends ConsumerWidget {
             width: 60,
             height: 60,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.22),
+              color: Colors.white.withValues(alpha: 0.22),
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
@@ -430,9 +411,41 @@ class SettingsScreen extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(name ?? 'Student',
-                    style: theme.textTheme.titleLarge
-                        ?.copyWith(color: Colors.white)),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(name ?? 'Student',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleLarge
+                              ?.copyWith(color: Colors.white)),
+                    ),
+                    if (isPro) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.22),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.workspace_premium_rounded,
+                                color: Colors.white, size: 13),
+                            const SizedBox(width: 3),
+                            Text('PRO',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.5)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
                 if (email != null)
                   Text(email,
                       maxLines: 1,
@@ -490,10 +503,13 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  // ── Accent color (Pro) ──────────────────────────────────────────────────
-  Widget _accentCard(BuildContext context, WidgetRef ref, ThemeData theme) {
+  // ── Appearance: theme mode + accent (Pro) ──────────────────────────────
+  Widget _appearanceCard(BuildContext context, WidgetRef ref, ThemeData theme) {
+    final mode = ref.watch(themeModeProvider);
     final selected = ref.watch(accentColorProvider);
     final isPro = ref.watch(isProProvider);
+    final activeAccent = selected ?? AppColors.primary;
+
     const palette = <Color>[
       AppColors.primary, // default purple
       Color(0xFF0EA5E9), // sky
@@ -505,7 +521,8 @@ class SettingsScreen extends ConsumerWidget {
       Color(0xFFF97316), // orange
       Color(0xFF6366F1), // indigo
     ];
-    Future<void> pick(Color? c) async {
+
+    Future<void> pick(Color c) async {
       if (!isPro) {
         await showPaywall(context);
         return;
@@ -516,55 +533,86 @@ class SettingsScreen extends ConsumerWidget {
           .set(c == AppColors.primary ? null : c);
     }
 
+    bool isSelectedSwatch(Color c) =>
+        (selected == null && c == AppColors.primary) ||
+        selected?.toARGB32() == c.toARGB32();
+
     return _card(
       theme,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.only(top: 12, bottom: 12),
             child: Row(
               children: [
-                const Text('Accent color'),
+                const Icon(Icons.palette_outlined,
+                    size: 18, color: AppColors.primary),
                 const SizedBox(width: 8),
-                _proChip(theme),
-                const Spacer(),
-                Text(selected == null ? 'Default' : 'Custom',
-                    style: theme.textTheme.bodySmall),
+                Text('Theme', style: theme.textTheme.titleSmall),
               ],
             ),
           ),
+          Row(
+            children: [
+              for (final m in ThemeMode.values) ...[
+                Expanded(
+                  child: _ThemeModeTile(
+                    mode: m,
+                    selected: mode == m,
+                    accent: activeAccent,
+                    onTap: () => ref.read(themeModeProvider.notifier).set(m),
+                  ),
+                ),
+                if (m != ThemeMode.dark) const SizedBox(width: 12),
+              ],
+            ],
+          ),
+          const SizedBox(height: 18),
+          const Divider(height: 1),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              const Icon(Icons.color_lens_outlined,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text('Accent color', style: theme.textTheme.titleSmall),
+              const SizedBox(width: 8),
+              if (!isPro) _proChip(theme),
+              const Spacer(),
+              Container(
+                width: 18,
+                height: 18,
+                decoration:
+                    BoxDecoration(color: activeAccent, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 6),
+              Text(selected == null ? 'Default' : 'Custom',
+                  style: theme.textTheme.bodySmall),
+            ],
+          ),
+          const SizedBox(height: 16),
           Wrap(
-            spacing: 12,
-            runSpacing: 12,
+            spacing: 14,
+            runSpacing: 14,
             children: [
               for (final c in palette)
-                GestureDetector(
+                _AccentSwatch(
+                  color: c,
+                  selected: isSelectedSwatch(c),
                   onTap: () => pick(c),
-                  child: Container(
-                    width: 34,
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: c,
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: (selected == null && c == AppColors.primary) ||
-                                selected?.toARGB32() == c.toARGB32()
-                            ? theme.colorScheme.onSurface
-                            : Colors.transparent,
-                        width: 2.5,
-                      ),
-                    ),
-                    child: ((selected == null && c == AppColors.primary) ||
-                            selected?.toARGB32() == c.toARGB32())
-                        ? const Icon(Icons.check_rounded,
-                            color: Colors.white, size: 18)
-                        : null,
-                  ),
                 ),
             ],
           ),
-          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 8),
+            child: Text(
+              isPro
+                  ? 'Personalise ClassTrack with your favourite accent.'
+                  : 'Unlock custom accent colors with ClassTrack Pro.',
+              style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+            ),
+          ),
         ],
       ),
     );
@@ -803,4 +851,187 @@ class SettingsScreen extends ConsumerWidget {
         ),
         child: child,
       );
+}
+
+/// A tappable theme-mode option showing a little live mock of the theme, with
+/// a selected ring in the current accent color.
+class _ThemeModeTile extends StatelessWidget {
+  final ThemeMode mode;
+  final bool selected;
+  final Color accent;
+  final VoidCallback onTap;
+  const _ThemeModeTile({
+    required this.mode,
+    required this.selected,
+    required this.accent,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final label = switch (mode) {
+      ThemeMode.system => 'System',
+      ThemeMode.light => 'Light',
+      ThemeMode.dark => 'Dark',
+    };
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          color: selected
+              ? accent.withValues(alpha: 0.06)
+              : Colors.transparent,
+          border: Border.all(
+            color: selected ? accent : theme.dividerColor,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Column(
+          children: [
+            _preview(),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (selected) ...[
+                  Icon(Icons.check_circle_rounded, size: 14, color: accent),
+                  const SizedBox(width: 4),
+                ],
+                Text(label,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      fontWeight:
+                          selected ? FontWeight.w700 : FontWeight.w500,
+                      color: selected ? accent : null,
+                    )),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _preview() {
+    const lightBg = Color(0xFFF4F3FB);
+    const lightCard = Colors.white;
+    const darkBg = Color(0xFF10131C);
+    const darkCard = Color(0xFF1B2030);
+    switch (mode) {
+      case ThemeMode.light:
+        return _mock(bg: lightBg, card: lightCard, line: Colors.black12);
+      case ThemeMode.dark:
+        return _mock(bg: darkBg, card: darkCard, line: Colors.white24);
+      case ThemeMode.system:
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Row(
+            children: [
+              Expanded(
+                child: _mock(
+                    bg: lightBg,
+                    card: lightCard,
+                    line: Colors.black12,
+                    radius: 0),
+              ),
+              Expanded(
+                child: _mock(
+                    bg: darkBg,
+                    card: darkCard,
+                    line: Colors.white24,
+                    radius: 0),
+              ),
+            ],
+          ),
+        );
+    }
+  }
+
+  Widget _mock({
+    required Color bg,
+    required Color card,
+    required Color line,
+    double radius = 10,
+  }) {
+    return Container(
+      height: 58,
+      decoration:
+          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(radius)),
+      padding: const EdgeInsets.all(7),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 20,
+            height: 4,
+            decoration: BoxDecoration(
+                color: accent, borderRadius: BorderRadius.circular(2)),
+          ),
+          const SizedBox(height: 6),
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                  color: card, borderRadius: BorderRadius.circular(5)),
+            ),
+          ),
+          const SizedBox(height: 5),
+          Container(
+            width: 28,
+            height: 3,
+            decoration: BoxDecoration(
+                color: line, borderRadius: BorderRadius.circular(2)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A single accent-color swatch with an animated selected ring + check.
+class _AccentSwatch extends StatelessWidget {
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+  const _AccentSwatch({
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        width: 38,
+        height: 38,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: selected ? theme.colorScheme.onSurface : Colors.transparent,
+            width: 2.5,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: selected ? 0.45 : 0.25),
+              blurRadius: selected ? 10 : 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: selected
+            ? const Icon(Icons.check_rounded, color: Colors.white, size: 18)
+            : null,
+      ),
+    );
+  }
 }
