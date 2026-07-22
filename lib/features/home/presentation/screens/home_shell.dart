@@ -21,8 +21,20 @@ import '../../../notes/presentation/screens/notes_screen.dart';
 import 'dashboard_screen.dart';
 
 /// Opens the "quick add" menu triggered by the center FAB. Available app-wide.
-Future<void> showQuickAddSheet(BuildContext context) {
-  return showModalBottomSheet(
+enum _QuickAddAction {
+  task,
+  course,
+  classSession,
+  subject,
+  exam,
+  grade,
+  note,
+  habit,
+  expense,
+}
+
+Future<void> showQuickAddSheet(BuildContext context) async {
+  final action = await showModalBottomSheet<_QuickAddAction>(
     context: context,
     isScrollControlled: true,
     builder: (ctx) {
@@ -82,125 +94,63 @@ Future<void> showQuickAddSheet(BuildContext context) {
                 color: AppColors.primary,
                 title: 'New task',
                 subtitle: 'Assignment, deadline or to-do',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => const TaskEditorSheet(),
-                  );
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.task),
               ),
               option(
                 icon: Icons.play_circle_fill_rounded,
                 color: AppColors.coral,
                 title: 'Course / video',
                 subtitle: 'Plan a course or video and paste its link',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) =>
-                        const TaskEditorSheet(initialType: TaskType.course),
-                  );
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.course),
               ),
               option(
                 icon: Icons.calendar_today_rounded,
                 color: AppColors.info,
                 title: 'New class',
                 subtitle: 'Add a session to your timetable',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const EditSessionScreen()));
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.classSession),
               ),
               option(
                 icon: Icons.menu_book_rounded,
                 color: AppColors.coral,
                 title: 'New subject',
                 subtitle: 'Track attendance for a course',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const EditSubjectScreen()));
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.subject),
               ),
               option(
                 icon: Icons.event_note_rounded,
                 color: AppColors.danger,
                 title: 'New exam',
                 subtitle: 'Add a test with a live countdown',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => const ExamEditorSheet(),
-                  );
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.exam),
               ),
               option(
                 icon: Icons.school_rounded,
                 color: AppColors.primary,
                 title: 'Log grade',
                 subtitle: 'Record a mark and update your GPA',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => const GradeEditorSheet(),
-                  );
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.grade),
               ),
               option(
                 icon: Icons.sticky_note_2_rounded,
                 color: AppColors.info,
                 title: 'New note',
                 subtitle: 'Jot down a lecture note or idea',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const NoteEditorScreen()));
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.note),
               ),
               option(
                 icon: Icons.local_fire_department_rounded,
                 color: AppColors.coral,
                 title: 'New habit',
                 subtitle: 'Build a streak you can keep',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  // Present the editor only after the quick-add sheet has
-                  // finished dismissing. Opening a second modal in the same
-                  // frame as popping the first can be dropped by the navigator
-                  // on some devices, which made "New habit" appear to do
-                  // nothing.
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    showModalBottomSheet(
-                      context: context,
-                      isScrollControlled: true,
-                      builder: (_) => const HabitEditorSheet(),
-                    );
-                  });
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.habit),
               ),
               option(
                 icon: Icons.account_balance_wallet_rounded,
                 color: AppColors.success,
                 title: 'Add expense',
                 subtitle: 'Log spending and track your budget',
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    builder: (_) => const ExpenseEditorSheet(),
-                  );
-                },
+                onTap: () => Navigator.pop(ctx, _QuickAddAction.expense),
               ),
                 ],
               ),
@@ -210,6 +160,49 @@ Future<void> showQuickAddSheet(BuildContext context) {
       );
     },
   );
+
+  // Open the chosen editor only AFTER the quick-add sheet has fully closed, so
+  // the two sheet animations never overlap (which felt laggy / janky before).
+  if (action == null || !context.mounted) return;
+
+  Future<void> openSheet(Widget sheet) => showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => sheet,
+      );
+
+  Future<void> openScreen(Widget screen) =>
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+
+  switch (action) {
+    case _QuickAddAction.task:
+      await openSheet(const TaskEditorSheet());
+      break;
+    case _QuickAddAction.course:
+      await openSheet(const TaskEditorSheet(initialType: TaskType.course));
+      break;
+    case _QuickAddAction.exam:
+      await openSheet(const ExamEditorSheet());
+      break;
+    case _QuickAddAction.grade:
+      await openSheet(const GradeEditorSheet());
+      break;
+    case _QuickAddAction.habit:
+      await openSheet(const HabitEditorSheet());
+      break;
+    case _QuickAddAction.expense:
+      await openSheet(const ExpenseEditorSheet());
+      break;
+    case _QuickAddAction.classSession:
+      await openScreen(const EditSessionScreen());
+      break;
+    case _QuickAddAction.subject:
+      await openScreen(const EditSubjectScreen());
+      break;
+    case _QuickAddAction.note:
+      await openScreen(const NoteEditorScreen());
+      break;
+  }
 }
 
 class HomeShell extends ConsumerStatefulWidget {
@@ -496,7 +489,7 @@ class _NavItemState extends State<_NavItem> {
                   child: Icon(
                     selected ? widget.activeIcon : widget.icon,
                     key: ValueKey(selected),
-                    size: selected ? 26 : 23,
+                    size: selected ? 30 : 27,
                     color: selected ? AppColors.primary : unselectedColor,
                   ),
                 ),
