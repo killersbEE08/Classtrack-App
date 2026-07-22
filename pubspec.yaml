@@ -1,0 +1,102 @@
+name: classtrack
+description: "ClassTrack — Attendance & class schedule tracker with Gemini AI import."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Firebase
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.4
+  firebase_storage: ^12.3.4
+  cloud_functions: ^5.1.4
+  google_sign_in: ^6.2.1
+
+  # Subscriptions / in-app purchases (RevenueCat)
+  purchases_flutter: ^8.4.0
+
+  # Routing
+  go_router: ^14.2.7
+
+  # Calendar & schedule
+  table_calendar: ^3.1.2
+
+  # Notifications
+  flutter_local_notifications: ^17.2.3
+  timezone: ^0.9.4
+  flutter_timezone: ^5.1.0
+
+  # Home-screen widget
+  home_widget: ^0.7.0
+
+  # Files, media & sharing
+  image_picker: ^1.1.2
+  share_plus: ^10.0.2
+  path_provider: ^2.1.4
+  url_launcher: ^6.3.0
+
+  # Export
+  pdf: ^3.11.1
+  printing: ^5.13.2
+  csv: ^6.0.0
+
+  # UI / polish
+  google_fonts: ^6.2.1
+  flutter_animate: ^4.5.0
+  confetti: ^0.8.0
+
+  # Utils
+  intl: ^0.19.0
+  shared_preferences: ^2.3.2
+  uuid: ^4.5.1
+  google_generative_ai: ^0.4.7
+  file_picker: 8.3.7
+  syncfusion_flutter_pdf: ^34.1.31
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
+  flutter_native_splash: ^2.4.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/illustrations/
+
+# App launcher icon (run: dart run flutter_launcher_icons)
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/icon.png"
+  min_sdk_android: 23
+  remove_alpha_ios: true
+  adaptive_icon_background: "#3730A3"
+  adaptive_icon_foreground: "assets/icon/icon_foreground.png"
+  web:
+    generate: true
+    image_path: "assets/icon/icon.png"
+    background_color: "#3730A3"
+    theme_color: "#3730A3"
+
+# Splash screen (run: dart run flutter_native_splash:create)
+flutter_native_splash:
+  color: "#3730A3"
+  image: "assets/icon/splash_logo.png"
+  android_12:
+    color: "#3730A3"
+    image: "assets/icon/splash_logo.png"
+  color_dark: "#0B1020"
+  image_dark: "assets/icon/splash_logo.png"
+

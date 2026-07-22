@@ -1,0 +1,31 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // A user's own files: timetable imports (users/{uid}/imports/**) and note
+    // attachments (users/{uid}/noteAttachments/**).
+    match /users/{uid}/{allPaths=**} {
+      // The owner can always read their own files.
+      allow read: if request.auth != null && request.auth.uid == uid;
+
+      // Uploads are limited to the owner, capped at 10 MB, and (when a
+      // contentType is reported) restricted to images/PDFs. contentType can be
+      // null on some clients — the earlier rule called .matches() on it
+      // unconditionally, which THROWS and denies every upload with an
+      // "unauthorized" error, so we now guard for null first. The 10 MB cap is
+      // kept in sync with NoteAttachmentService.maxBytes on the client.
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && (request.resource == null
+            || (request.resource.size < 10 * 1024 * 1024
+                && (request.resource.contentType == null
+                    || request.resource.contentType.matches('image/.*')
+                    || request.resource.contentType == 'application/pdf')));
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
