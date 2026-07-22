@@ -4,6 +4,7 @@ import 'package:classtrack/features/auth/presentation/providers/auth_providers.d
 import 'package:classtrack/features/referral/domain/referral_info.dart';
 import 'package:classtrack/features/referral/presentation/providers/referral_providers.dart';
 import 'package:classtrack/features/referral/presentation/screens/referral_screen.dart';
+import 'package:classtrack/features/subscription/presentation/providers/subscription_providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +32,9 @@ void main() {
             (ref) => Stream<AppUser?>.value(
               const AppUser(uid: 'u1', displayName: 'Alex'),
             ),
+          ),
+          proEntitlementProvider.overrideWith(
+            (ref) => Stream.value(const ProEntitlement()),
           ),
         ],
         child: MaterialApp(

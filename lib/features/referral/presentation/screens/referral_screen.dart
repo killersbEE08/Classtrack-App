@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
+import '../../../subscription/presentation/providers/subscription_providers.dart';
 import '../../domain/referral_info.dart';
 import '../providers/referral_providers.dart';
 
@@ -106,6 +108,8 @@ class _ReferralBodyState extends ConsumerState<_ReferralBody> {
     final profile = ref.watch(userProfileProvider).valueOrNull;
     final count = profile?.referralCount ?? info.referralCount;
     final rewardDays = info.rewardDays;
+    final pro = ref.watch(proEntitlementProvider).valueOrNull ??
+        const ProEntitlement();
     final redeemState = ref.watch(redeemControllerProvider);
     final alreadyRedeemed = info.hasRedeemed || (profile?.referredBy != null);
 
@@ -133,7 +137,7 @@ class _ReferralBodyState extends ConsumerState<_ReferralBody> {
           ),
         ),
         const SizedBox(height: 24),
-        _ProgressCard(count: count, rewardDays: rewardDays),
+        _ProgressCard(count: count, rewardDays: rewardDays, pro: pro),
         const SizedBox(height: 24),
         Text('How it works', style: theme.textTheme.titleMedium),
         const SizedBox(height: 12),
@@ -259,11 +263,17 @@ class _CodeCard extends StatelessWidget {
   }
 }
 
-/// Shows invites so far, days earned and progress toward the ambassador goal.
+/// Shows invites so far, the user's real Pro status, and progress toward the
+/// ambassador goal.
 class _ProgressCard extends StatelessWidget {
   final int count;
   final int rewardDays;
-  const _ProgressCard({required this.count, required this.rewardDays});
+  final ProEntitlement pro;
+  const _ProgressCard({
+    required this.count,
+    required this.rewardDays,
+    required this.pro,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -271,7 +281,31 @@ class _ProgressCard extends StatelessWidget {
     const goal = AppConstants.referralAmbassadorGoal;
     final progress = (count / goal).clamp(0.0, 1.0);
     final reachedGoal = count >= goal;
-    final earnedDays = count * rewardDays;
+
+    // Real, server-trusted Pro status (not the old cosmetic count × days).
+    final String proValue;
+    final String proLabel;
+    if (pro.permanent) {
+      proValue = 'Active';
+      proLabel = 'ClassTrack Pro';
+    } else if (pro.active) {
+      proValue = '${pro.daysLeft}';
+      proLabel = pro.daysLeft == 1 ? 'Pro day left' : 'Pro days left';
+    } else {
+      proValue = '0';
+      proLabel = 'Pro days left';
+    }
+
+    final String statusLine;
+    if (pro.permanent) {
+      statusLine = 'ClassTrack Pro is active on your account.';
+    } else if (pro.active && pro.until != null) {
+      statusLine =
+          'Pro active until ${DateFormat.yMMMd().format(pro.until!)}.';
+    } else {
+      statusLine =
+          'Invite a friend to unlock $rewardDays days of ClassTrack Pro.';
+    }
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -301,14 +335,30 @@ class _ProgressCard extends StatelessWidget {
               ),
               Expanded(
                 child: _StatBlock(
-                  value: '$earnedDays',
-                  label: 'Pro days earned',
-                  color: AppColors.success,
+                  value: proValue,
+                  label: proLabel,
+                  color: pro.active ? AppColors.success : null,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Icon(
+                pro.active
+                    ? Icons.workspace_premium_rounded
+                    : Icons.lock_open_rounded,
+                size: 16,
+                color: pro.active ? AppColors.success : theme.hintColor,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(statusLine, style: theme.textTheme.bodySmall),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
           ClipRRect(
             borderRadius: BorderRadius.circular(10),
             child: LinearProgressIndicator(

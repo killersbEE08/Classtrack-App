@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -306,7 +307,7 @@ class _CenterFabState extends State<_CenterFab>
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 18),
+      padding: const EdgeInsets.only(top: 26),
       child: GestureDetector(
         onTapDown: (_) => setState(() => _scale = 0.88),
         onTapUp: (_) {
@@ -320,8 +321,8 @@ class _CenterFabState extends State<_CenterFab>
           duration: const Duration(milliseconds: 120),
           curve: Curves.easeOut,
           child: Container(
-            width: 58,
-            height: 58,
+            width: 54,
+            height: 54,
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [AppColors.primaryLight, AppColors.primary],
@@ -337,8 +338,26 @@ class _CenterFabState extends State<_CenterFab>
                 ),
               ],
             ),
-            child: const Icon(Icons.add_rounded, color: Colors.white, size: 30),
-          ),
+            child: const Icon(Icons.add_rounded, color: Colors.white, size: 28),
+          )
+              // Gentle continuous "breathing" so the primary action stays
+              // subtly alive without being distracting.
+              .animate(onPlay: (c) => c.repeat(reverse: true))
+              .scaleXY(
+                begin: 1,
+                end: 1.06,
+                duration: 2200.ms,
+                curve: Curves.easeInOut,
+              )
+              // Springy entrance the first time the shell mounts.
+              .animate()
+              .scale(
+                begin: const Offset(0.6, 0.6),
+                end: const Offset(1, 1),
+                duration: 420.ms,
+                curve: Curves.easeOutBack,
+              )
+              .fadeIn(duration: 280.ms),
         ),
       ),
     );

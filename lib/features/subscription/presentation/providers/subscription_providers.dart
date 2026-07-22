@@ -67,18 +67,67 @@ final serverProProvider = StreamProvider<bool>((ref) {
 
 /// True when the entitlement doc grants Pro: a permanent `pro: true` flag, or a
 /// `proUntil` date/timestamp still in the future.
-bool entitlementIsActive(Map<String, dynamic>? data) {
-  if (data == null) return false;
-  if (data['pro'] == true) return true;
-  final until = data['proUntil'];
-  DateTime? untilDate;
-  if (until is Timestamp) {
-    untilDate = until.toDate();
-  } else if (until is num) {
-    untilDate = DateTime.fromMillisecondsSinceEpoch(until.toInt());
+bool entitlementIsActive(Map<String, dynamic>? data) =>
+    parseEntitlement(data).active;
+
+/// Rich, server-trusted Pro entitlement details for the current user: whether
+/// it's active, whether it's a permanent flag (e.g. a paid subscription), and
+/// the expiry date for a time-boxed gift (referral reward / promo).
+class ProEntitlement {
+  final bool active;
+  final bool permanent;
+  final DateTime? until;
+
+  const ProEntitlement({
+    this.active = false,
+    this.permanent = false,
+    this.until,
+  });
+
+  /// Whole days remaining on a time-boxed grant (rounded up). 0 when there is
+  /// no expiry (permanent or inactive).
+  int get daysLeft {
+    final u = until;
+    if (u == null) return 0;
+    final mins = u.difference(DateTime.now()).inMinutes;
+    if (mins <= 0) return 0;
+    return (mins / (60 * 24)).ceil();
   }
-  return untilDate != null && untilDate.isAfter(DateTime.now());
 }
+
+/// Parses an `_entitlements/{uid}` document into a [ProEntitlement].
+ProEntitlement parseEntitlement(Map<String, dynamic>? data) {
+  if (data == null) return const ProEntitlement();
+  final permanent = data['pro'] == true;
+  final raw = data['proUntil'];
+  DateTime? untilDate;
+  if (raw is Timestamp) {
+    untilDate = raw.toDate();
+  } else if (raw is num) {
+    untilDate = DateTime.fromMillisecondsSinceEpoch(raw.toInt());
+  }
+  final futureUntil =
+      (untilDate != null && untilDate.isAfter(DateTime.now())) ? untilDate : null;
+  return ProEntitlement(
+    active: permanent || futureUntil != null,
+    permanent: permanent,
+    until: futureUntil,
+  );
+}
+
+/// Streams the current user's full Pro entitlement details (permanent flag +
+/// expiry), so screens can show the real Pro status rather than a cosmetic
+/// estimate. Reads the owner-readable `_entitlements/{uid}` doc.
+final proEntitlementProvider = StreamProvider<ProEntitlement>((ref) {
+  final uid = ref.watch(currentUidProvider);
+  if (uid == null) return Stream.value(const ProEntitlement());
+  final db = ref.watch(firestoreProvider);
+  return db
+      .collection('_entitlements')
+      .doc(uid)
+      .snapshots()
+      .map((snap) => parseEntitlement(snap.data()));
+});
 
 /// Keeps RevenueCat's identity in sync with Firebase auth: logs the user in to
 /// RevenueCat when they sign in, and out when they sign out. Watch this once
