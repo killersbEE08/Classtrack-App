@@ -579,30 +579,56 @@ export const getReferralInfo = onCall({ cors: true }, async (request) => {
   const uid = request.auth.uid;
   const db = getFirestore();
   const userRef = db.collection("users").doc(uid);
+  const entRef = db.collection("_entitlements").doc(uid);
 
   const result = await db.runTransaction(async (tx) => {
     // All reads must precede all writes in a Firestore transaction.
     const userSnap = await tx.get(userRef);
     const data = userSnap.exists ? userSnap.data() : {};
-    let code = data.referralCode || null;
+    const entSnap = await tx.get(entRef);
 
+    let code = data.referralCode || null;
+    let mapRef = null;
     if (!code) {
       const candidate = generateReferralCode();
-      const mapRef = db.collection("_referralCodes").doc(candidate);
+      mapRef = db.collection("_referralCodes").doc(candidate);
       const mapSnap = await tx.get(mapRef);
       if (mapSnap.exists) {
         // Astronomically rare collision — ask the client to retry.
         throw new HttpsError("aborted", "Please try again.");
       }
-      tx.set(mapRef, { uid, createdAt: Date.now() });
-      tx.set(userRef, { referralCode: candidate }, { merge: true });
       code = candidate;
+    }
+
+    // Self-heal referral rewards: reconcile the Pro days this user has EARNED
+    // (REFERRAL_REWARD_DAYS per successful invite, plus one reward if they
+    // redeemed a friend's code) against what we've actually granted so far.
+    // This repairs accounts left short by the old non-atomic grant path (where
+    // the referral count could increment without the Pro grant landing), and
+    // stays idempotent because we persist the running total in
+    // `referralProDaysGranted` — so a healthy account computes missing = 0.
+    const referralCount = data.referralCount || 0;
+    const referredBy = data.referredBy || null;
+    const owedDays =
+      referralCount * REFERRAL_REWARD_DAYS +
+      (referredBy ? REFERRAL_REWARD_DAYS : 0);
+    const grantedDays = data.referralProDaysGranted || 0;
+    const missingDays = owedDays - grantedDays;
+
+    // ---- writes (all reads above are complete) ----
+    if (mapRef) {
+      tx.set(mapRef, { uid, createdAt: Date.now() });
+      tx.set(userRef, { referralCode: code }, { merge: true });
+    }
+    if (missingDays > 0) {
+      grantProDaysTx(tx, entRef, entSnap, missingDays, Date.now());
+      tx.set(userRef, { referralProDaysGranted: owedDays }, { merge: true });
     }
 
     return {
       code,
-      referralCount: data.referralCount || 0,
-      referredBy: data.referredBy || null,
+      referralCount,
+      referredBy,
       rewardDays: REFERRAL_REWARD_DAYS,
     };
   });
@@ -668,14 +694,23 @@ export const redeemReferral = onCall({ cors: true }, async (request) => {
 
     // ---- writes ----
     const now = Date.now();
+    // Track the running total of referral Pro days granted to each side so the
+    // self-heal reconciliation in getReferralInfo never double-grants.
     tx.set(
       userRef,
-      { referredBy: referrerUid, referredAt: now },
+      {
+        referredBy: referrerUid,
+        referredAt: now,
+        referralProDaysGranted: FieldValue.increment(REFERRAL_REWARD_DAYS),
+      },
       { merge: true }
     );
     tx.set(
       referrerRef,
-      { referralCount: FieldValue.increment(1) },
+      {
+        referralCount: FieldValue.increment(1),
+        referralProDaysGranted: FieldValue.increment(REFERRAL_REWARD_DAYS),
+      },
       { merge: true }
     );
     // Reward both sides atomically with the relationship record.
