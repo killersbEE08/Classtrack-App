@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -5,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/date_utils.dart';
+import '../../../insights/domain/insight_math.dart';
 import '../../../../shared/widgets/states.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../domain/expense.dart';
@@ -19,6 +22,7 @@ class ExpensesScreen extends ConsumerStatefulWidget {
 
 class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
   late DateTime _month;
+  ExpenseCategory? _filter; // null = all categories
 
   @override
   void initState() {
@@ -39,7 +43,19 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
   }
 
   void _shiftMonth(int delta) {
-    setState(() => _month = DateTime(_month.year, _month.month + delta));
+    setState(() {
+      _month = DateTime(_month.year, _month.month + delta);
+      _filter = null;
+    });
+  }
+
+  String _dayLabel(DateTime d) {
+    final now = DateTime.now();
+    if (DateUtilsX.isSameDay(d, now)) return 'Today';
+    if (DateUtilsX.isSameDay(d, now.subtract(const Duration(days: 1)))) {
+      return 'Yesterday';
+    }
+    return DateUtilsX.prettyDate(d);
   }
 
   @override
@@ -61,6 +77,15 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
     }
     final breakdownList = breakdown.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
+
+    // Projected month-end spend (current month only): extrapolate today's rate.
+    final projected = _isCurrentMonth
+        ? projectedMonthlySpend(spentSoFar: total, now: DateTime.now())
+        : total;
+
+    final filtered = _filter == null
+        ? monthExpenses
+        : monthExpenses.where((e) => e.category == _filter).toList();
 
     return Scaffold(
       body: SafeArea(
@@ -87,15 +112,31 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
             const SizedBox(height: 12),
             _monthSwitcher(theme),
             const SizedBox(height: 16),
-            _totalCard(context, theme, total, budget, currency),
+            _totalCard(context, theme, total, budget, currency, projected)
+                .animate()
+                .fadeIn(duration: 300.ms)
+                .slideY(begin: 0.06, curve: Curves.easeOut),
             const SizedBox(height: 14),
-            _statsRow(theme, monthExpenses.length, total, currency),
+            _statsRow(theme, monthExpenses.length, total, currency,
+                breakdownList.isEmpty ? null : breakdownList.first.key),
             const SizedBox(height: 20),
             if (breakdownList.isNotEmpty) ...[
               _breakdownCard(context, theme, breakdownList, total, currency),
               const SizedBox(height: 20),
             ],
-            Text('Transactions', style: theme.textTheme.titleLarge),
+            Row(
+              children: [
+                Text('Transactions', style: theme.textTheme.titleLarge),
+                const Spacer(),
+                if (monthExpenses.isNotEmpty)
+                  Text('${filtered.length} shown',
+                      style: theme.textTheme.bodySmall),
+              ],
+            ),
+            if (breakdownList.length > 1) ...[
+              const SizedBox(height: 12),
+              _categoryFilter(theme, breakdownList),
+            ],
             const SizedBox(height: 12),
             expensesAsync.when(
               loading: () => const Padding(
@@ -103,18 +144,116 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
               error: (e, _) => ErrorView(error: e),
               data: (_) {
                 if (monthExpenses.isEmpty) return _empty(context);
-                return Column(
-                  children: [
-                    for (var i = 0; i < monthExpenses.length; i++)
-                      _expenseTile(context, monthExpenses[i], currency)
-                          .animate()
-                          .fadeIn(delay: (i * 30).ms, duration: 260.ms),
-                  ],
-                );
+                if (filtered.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 24),
+                    child: Center(
+                      child: Text('No ${_filter?.label.toLowerCase()} expenses',
+                          style: theme.textTheme.bodyMedium),
+                    ),
+                  );
+                }
+                return _groupedTransactions(context, filtered, currency);
               },
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Transactions grouped by day with a per-day subtotal header.
+  Widget _groupedTransactions(
+      BuildContext context, List<Expense> expenses, String currency) {
+    final theme = Theme.of(context);
+    final groups = <DateTime, List<Expense>>{};
+    for (final e in expenses) {
+      final key = DateTime(e.date.year, e.date.month, e.date.day);
+      groups.putIfAbsent(key, () => []).add(e);
+    }
+    final dayKeys = groups.keys.toList()..sort((a, b) => b.compareTo(a));
+
+    var index = 0;
+    final children = <Widget>[];
+    for (final day in dayKeys) {
+      final items = groups[day]!;
+      final dayTotal = items.fold<double>(0, (a, e) => a + e.amount);
+      children.add(Padding(
+        padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+        child: Row(
+          children: [
+            Text(_dayLabel(day),
+                style: theme.textTheme.labelLarge
+                    ?.copyWith(fontWeight: FontWeight.w700)),
+            const Spacer(),
+            Text('$currency${dayTotal.toStringAsFixed(2)}',
+                style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.hintColor, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      ));
+      for (final e in items) {
+        children.add(_expenseTile(context, e, currency)
+            .animate()
+            .fadeIn(delay: (index++ * 25).ms, duration: 240.ms));
+      }
+    }
+    return Column(children: children);
+  }
+
+  Widget _categoryFilter(
+      ThemeData theme, List<MapEntry<ExpenseCategory, double>> breakdown) {
+    Widget chip(String label, IconData? icon, Color color, bool selected,
+        VoidCallback onTap) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: GestureDetector(
+          onTap: onTap,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: selected ? color : theme.cardColor,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                  color: selected ? color : theme.dividerColor),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon,
+                      size: 15,
+                      color: selected ? Colors.white : color),
+                  const SizedBox(width: 6),
+                ],
+                Text(label,
+                    style: TextStyle(
+                        color: selected
+                            ? Colors.white
+                            : theme.textTheme.bodyMedium?.color,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    return SizedBox(
+      height: 40,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.zero,
+        children: [
+          chip('All', null, AppColors.primary, _filter == null,
+              () => setState(() => _filter = null)),
+          for (final entry in breakdown)
+            chip(entry.key.label, entry.key.icon, entry.key.color,
+                _filter == entry.key,
+                () => setState(() => _filter = entry.key)),
+        ],
       ),
     );
   }
@@ -151,19 +290,21 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
           width: 40,
           height: 40,
           child: Icon(icon,
-              size: 22,
-              color: onTap == null ? theme.disabledColor : null),
+              size: 22, color: onTap == null ? theme.disabledColor : null),
         ),
       ),
     );
   }
 
   Widget _totalCard(BuildContext context, ThemeData theme, double total,
-      double budget, String currency) {
+      double budget, String currency, double projected) {
     final hasBudget = budget > 0;
     final ratio = hasBudget ? (total / budget).clamp(0.0, 1.0) : 0.0;
     final over = hasBudget && total > budget;
     final remaining = budget - total;
+    // Warn when the projected month-end spend will blow the budget.
+    final projectedOver =
+        hasBudget && _isCurrentMonth && projected > budget && !over;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -175,13 +316,14 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(28),
+        boxShadow: AppColors.softShadow(opacity: 0.22, blur: 26),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Text('Spent this month',
+              Text(_isCurrentMonth ? 'Spent this month' : 'Spent',
                   style: theme.textTheme.labelLarge
                       ?.copyWith(color: Colors.white70)),
               const Spacer(),
@@ -189,8 +331,8 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                 onTap: () => _setBudgetDialog(context, budget),
                 borderRadius: BorderRadius.circular(20),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   child: Row(
                     children: [
                       const Icon(Icons.edit_rounded,
@@ -235,13 +377,46 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
                   color: Colors.white, fontWeight: FontWeight.w600),
             ),
           ],
+          // Projected month-end spend insight (current month).
+          if (_isCurrentMonth && total > 0) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                      projectedOver
+                          ? Icons.trending_up_rounded
+                          : Icons.insights_rounded,
+                      size: 16,
+                      color: Colors.white),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      projectedOver
+                          ? 'At this pace you’ll spend ~$currency${projected.toStringAsFixed(0)} — over budget'
+                          : 'On track for ~$currency${projected.toStringAsFixed(0)} by month-end',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  Widget _statsRow(
-      ThemeData theme, int count, double total, String currency) {
+  Widget _statsRow(ThemeData theme, int count, double total, String currency,
+      ExpenseCategory? topCategory) {
     final avg = total / (_daysForAverage == 0 ? 1 : _daysForAverage);
     Widget stat(IconData icon, String value, String label, Color color) {
       return Expanded(
@@ -271,14 +446,22 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
             AppColors.primary),
         const SizedBox(width: 12),
         stat(Icons.trending_down_rounded,
-            '$currency${avg.toStringAsFixed(0)}', 'Avg / day',
-            AppColors.info),
+            '$currency${avg.toStringAsFixed(0)}', 'Avg / day', AppColors.info),
+        const SizedBox(width: 12),
+        stat(
+            topCategory?.icon ?? Icons.category_rounded,
+            topCategory?.label ?? '—',
+            'Top spend',
+            topCategory?.color ?? AppColors.cancelled),
       ],
     );
   }
 
-  Widget _breakdownCard(BuildContext context, ThemeData theme,
-      List<MapEntry<ExpenseCategory, double>> breakdown, double total,
+  Widget _breakdownCard(
+      BuildContext context,
+      ThemeData theme,
+      List<MapEntry<ExpenseCategory, double>> breakdown,
+      double total,
       String currency) {
     return Container(
       padding: const EdgeInsets.all(18),
@@ -287,32 +470,80 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('By category', style: theme.textTheme.titleMedium),
-          const SizedBox(height: 14),
-          for (final entry in breakdown) ...[
-            Row(
-              children: [
-                Icon(entry.key.icon, size: 16, color: entry.key.color),
-                const SizedBox(width: 8),
-                Expanded(
-                    child: Text(entry.key.label,
-                        style: theme.textTheme.bodyMedium)),
-                Text('$currency${entry.value.toStringAsFixed(0)}',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w700)),
-              ],
-            ),
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: LinearProgressIndicator(
-                value: total > 0 ? (entry.value / total).clamp(0, 1) : 0,
-                minHeight: 7,
-                backgroundColor: entry.key.color.withValues(alpha: 0.12),
-                valueColor: AlwaysStoppedAnimation(entry.key.color),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              // Donut chart.
+              SizedBox(
+                width: 116,
+                height: 116,
+                child: CustomPaint(
+                  painter: _DonutPainter(
+                    segments: [
+                      for (final e in breakdown)
+                        _DonutSegment(e.value, e.key.color),
+                    ],
+                    trackColor: theme.dividerColor,
+                  ),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('${breakdown.length}',
+                            style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w800, height: 1)),
+                        Text('categories',
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(fontSize: 10)),
+                      ],
+                    ),
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-          ],
+              const SizedBox(width: 18),
+              // Legend.
+              Expanded(
+                child: Column(
+                  children: [
+                    for (final entry in breakdown.take(5))
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                  color: entry.key.color,
+                                  shape: BoxShape.circle),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(entry.key.label,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodySmall),
+                            ),
+                            Text(
+                              total > 0
+                                  ? '${(entry.value / total * 100).toStringAsFixed(0)}%'
+                                  : '0%',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.hintColor,
+                                  fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(width: 8),
+                            Text('$currency${entry.value.toStringAsFixed(0)}',
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(fontWeight: FontWeight.w700)),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -320,46 +551,94 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
 
   Widget _expenseTile(BuildContext context, Expense e, String currency) {
     final theme = Theme.of(context);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: softCard(context),
-      child: InkWell(
-        onTap: () => _openEditor(context, expense: e),
-        borderRadius: BorderRadius.circular(20),
-        child: Row(
+    return Dismissible(
+      key: ValueKey(e.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 24),
+        margin: const EdgeInsets.only(bottom: 10),
+        decoration: BoxDecoration(
+          color: AppColors.danger.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: e.category.color.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(e.category.icon, size: 20, color: e.category.color),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(e.title.isEmpty ? e.category.label : e.title,
-                      style: theme.textTheme.titleMedium,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
-                  Text('${e.category.label} · ${DateUtilsX.prettyDate(e.date)}',
-                      style: theme.textTheme.bodySmall),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text('$currency${e.amount.toStringAsFixed(2)}',
-                style: theme.textTheme.titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w800)),
+            Icon(Icons.delete_outline_rounded, color: AppColors.danger),
+            SizedBox(width: 6),
+            Text('Delete',
+                style: TextStyle(
+                    color: AppColors.danger, fontWeight: FontWeight.w700)),
           ],
         ),
       ),
+      onDismissed: (_) => _deleteWithUndo(context, e),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: softCard(context),
+        child: InkWell(
+          onTap: () => _openEditor(context, expense: e),
+          borderRadius: BorderRadius.circular(20),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: e.category.color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child:
+                    Icon(e.category.icon, size: 20, color: e.category.color),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(e.title.isEmpty ? e.category.label : e.title,
+                        style: theme.textTheme.titleMedium,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
+                    Text(
+                        '${e.category.label} · ${DateUtilsX.prettyDate(e.date)}',
+                        style: theme.textTheme.bodySmall),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text('$currency${e.amount.toStringAsFixed(2)}',
+                  style: theme.textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w800)),
+            ],
+          ),
+        ),
+      ),
     );
+  }
+
+  void _deleteWithUndo(BuildContext context, Expense e) {
+    final ctrl = ref.read(expenseControllerProvider);
+    ctrl.delete(e.id);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.removeCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(seconds: 4),
+      content: Text('Deleted “${e.title.isEmpty ? e.category.label : e.title}”'),
+      action: SnackBarAction(
+        label: 'Undo',
+        // Re-add restores the content under a fresh id.
+        onPressed: () => ctrl.add(Expense(
+          id: 'new',
+          title: e.title,
+          amount: e.amount,
+          category: e.category,
+          date: e.date,
+        )),
+      ),
+    ));
   }
 
   Widget _empty(BuildContext context) {
@@ -372,7 +651,8 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
           const Icon(Icons.account_balance_wallet_rounded,
               size: 42, color: AppColors.primary),
           const SizedBox(height: 12),
-          Text('Nothing logged this month', style: theme.textTheme.titleMedium),
+          Text('Nothing logged this month',
+              style: theme.textTheme.titleMedium),
           const SizedBox(height: 6),
           Text('Add an expense to see it here.',
               textAlign: TextAlign.center, style: theme.textTheme.bodySmall),
@@ -454,6 +734,61 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
   }
 }
 
+/// A single slice of the category donut.
+class _DonutSegment {
+  final double value;
+  final Color color;
+  const _DonutSegment(this.value, this.color);
+}
+
+/// Paints a category-breakdown donut with rounded gaps between slices.
+class _DonutPainter extends CustomPainter {
+  final List<_DonutSegment> segments;
+  final Color trackColor;
+
+  _DonutPainter({required this.segments, required this.trackColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const stroke = 16.0;
+    final rect = Rect.fromCircle(
+      center: Offset(size.width / 2, size.height / 2),
+      radius: (size.width - stroke) / 2,
+    );
+    final total = segments.fold<double>(0, (a, s) => a + s.value);
+
+    // Background track.
+    final track = Paint()
+      ..color = trackColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = stroke;
+    canvas.drawArc(rect, 0, 2 * math.pi, false, track);
+
+    if (total <= 0) return;
+
+    const gap = 0.04; // radians between slices
+    var start = -math.pi / 2;
+    for (final s in segments) {
+      final sweep = (s.value / total) * (2 * math.pi) - gap;
+      if (sweep <= 0) {
+        start += (s.value / total) * (2 * math.pi);
+        continue;
+      }
+      final paint = Paint()
+        ..color = s.color
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = stroke;
+      canvas.drawArc(rect, start + gap / 2, sweep, false, paint);
+      start += (s.value / total) * (2 * math.pi);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DonutPainter old) =>
+      old.segments != segments || old.trackColor != trackColor;
+}
+
 class _AddButton extends StatelessWidget {
   final VoidCallback onTap;
   const _AddButton({required this.onTap});
@@ -491,8 +826,7 @@ class ExpenseEditorSheet extends ConsumerStatefulWidget {
   const ExpenseEditorSheet({super.key, this.initial});
 
   @override
-  ConsumerState<ExpenseEditorSheet> createState() =>
-      _ExpenseEditorSheetState();
+  ConsumerState<ExpenseEditorSheet> createState() => _ExpenseEditorSheetState();
 }
 
 class _ExpenseEditorSheetState extends ConsumerState<ExpenseEditorSheet> {
@@ -517,6 +851,16 @@ class _ExpenseEditorSheetState extends ConsumerState<ExpenseEditorSheet> {
     _title.dispose();
     _amount.dispose();
     super.dispose();
+  }
+
+  void _bumpAmount(double delta) {
+    final current = double.tryParse(_amount.text.trim()) ?? 0;
+    final next = (current + delta).clamp(0, 9999999).toDouble();
+    setState(() {
+      _amount.text = next == next.roundToDouble()
+          ? next.toStringAsFixed(0)
+          : next.toStringAsFixed(2);
+    });
   }
 
   void _save() {
@@ -593,6 +937,18 @@ class _ExpenseEditorSheetState extends ConsumerState<ExpenseEditorSheet> {
                 labelText: 'Amount',
                 prefixText: '$currency ',
               ),
+            ),
+            const SizedBox(height: 10),
+            // Quick-add amount chips.
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final v in [50, 100, 200, 500])
+                  ActionChip(
+                    label: Text('+$v'),
+                    onPressed: () => _bumpAmount(v.toDouble()),
+                  ),
+              ],
             ),
             const SizedBox(height: 12),
             TextField(

@@ -4,23 +4,28 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../services/gemini_service.dart';
+import '../../../services/google_calendar_service.dart';
 import '../../schedule/data/session_repository.dart';
 import '../../schedule/domain/class_session.dart';
 import '../../subjects/data/subject_repository.dart';
 import '../../subjects/domain/subject.dart';
+import '../domain/google_calendar_mapper.dart';
 import '../domain/parsed_schedule.dart';
 
 /// Parses timetables via client-side Gemini and commits confirmed results.
 class ImportRepository {
   final GeminiService _gemini;
+  final GoogleCalendarService _calendar;
   final SubjectRepository _subjectRepo;
   final SessionRepository _sessionRepo;
 
   ImportRepository({
     required GeminiService gemini,
+    required GoogleCalendarService calendar,
     required SubjectRepository subjectRepo,
     required SessionRepository sessionRepo,
   })  : _gemini = gemini,
+        _calendar = calendar,
         _subjectRepo = subjectRepo,
         _sessionRepo = sessionRepo;
 
@@ -31,6 +36,13 @@ class ImportRepository {
 
   Future<ParsedSchedule> parseImage(Uint8List bytes) =>
       _gemini.parseSchedule(imageBytes: bytes);
+
+  /// Signs the user into Google (read-only calendar scope) and turns their
+  /// upcoming events into a reviewable weekly schedule. No AI/Gemini needed.
+  Future<ParsedSchedule> parseGoogleCalendar() async {
+    final events = await _calendar.fetchUpcomingEvents();
+    return googleCalendarToSchedule(events);
+  }
 
   /// Commit the reviewed schedule: create subjects + their sessions.
   /// Returns the number of subjects created.

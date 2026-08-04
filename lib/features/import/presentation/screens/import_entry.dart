@@ -1,0 +1,98 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../../services/google_calendar_service.dart';
+import '../providers/import_providers.dart';
+import 'import_screen.dart';
+import 'review_screen.dart';
+
+/// Bottom sheet offering the ways to import a timetable: straight from Google
+/// Calendar, or via the AI photo/text importer. Shared by the Schedule and
+/// Calendar screens so both expose the same entry point.
+void showImportOptions(BuildContext context, WidgetRef ref) {
+  showModalBottomSheet(
+    context: context,
+    showDragHandle: true,
+    builder: (ctx) {
+      final theme = Theme.of(ctx);
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Text('Import schedule', style: theme.textTheme.titleLarge),
+            ),
+            ListTile(
+              leading: const Icon(Icons.event_available_rounded),
+              title: const Text('Google Calendar'),
+              subtitle:
+                  const Text('Bring in classes from your Google Calendar'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _runGoogleCalendarImport(context, ref);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.auto_awesome_rounded),
+              title: const Text('Photo or text (AI)'),
+              subtitle: const Text('Scan a timetable image or paste text'),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ImportScreen()),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+/// Signs into Google Calendar, fetches upcoming events, and opens the review
+/// screen. Shows a blocking spinner while it works and surfaces friendly
+/// messages for the cancel / empty / error cases.
+Future<void> _runGoogleCalendarImport(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final repo = ref.read(importRepositoryProvider);
+  final messenger = ScaffoldMessenger.of(context);
+  final navigator = Navigator.of(context);
+
+  if (repo == null) {
+    messenger.showSnackBar(const SnackBar(content: Text('Please sign in first.')));
+    return;
+  }
+
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const Center(child: CircularProgressIndicator()),
+  );
+
+  try {
+    final schedule = await repo.parseGoogleCalendar();
+    navigator.pop(); // dismiss the spinner
+    if (schedule.isEmpty) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('No timed classes found in your calendar.'),
+      ));
+      return;
+    }
+    navigator.push(
+      MaterialPageRoute(builder: (_) => ReviewScreen(schedule: schedule)),
+    );
+  } on GoogleCalendarCancelled {
+    navigator.pop(); // just close the spinner, no error
+  } catch (e) {
+    navigator.pop();
+    messenger.showSnackBar(
+      SnackBar(content: Text('Google Calendar import failed: $e')),
+    );
+  }
+}

@@ -1,6 +1,8 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest_all.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
@@ -17,10 +19,91 @@ class NotificationService {
       FlutterLocalNotificationsPlugin();
   bool _ready = false;
 
+  /// Subject ids we currently have class reminders scheduled for. Used to
+  /// cancel reminders for subjects that get deleted between syncs (otherwise
+  /// their weekly reminders would keep firing forever).
+  final Set<String> _scheduledClassSubjects = {};
+
+  /// The concrete notification ids currently scheduled for each subject's class
+  /// reminders, keyed by subject id. Because a subject can have several classes
+  /// on the same weekday (e.g. a 09:00 and a 14:00 slot), reminders are keyed by
+  /// subject + weekday + start-time, so we must remember exactly which ids we
+  /// created in order to cancel them precisely on prune/delete/reschedule.
+  final Map<String, Set<int>> _classReminderIds = {};
+
+  /// Android delivery mode. Defaults to inexact (never throws, always allowed);
+  /// upgraded to exact-while-idle once we confirm the OS permits exact alarms,
+  /// so time-sensitive reminders (class start, 7:30 daily summary) fire on time
+  /// instead of being batched/delayed by Doze. Falls back to inexact when the
+  /// SCHEDULE_EXACT_ALARM permission isn't granted, so scheduling never fails.
+  AndroidScheduleMode _scheduleMode =
+      AndroidScheduleMode.inexactAllowWhileIdle;
+
+  /// Payload of the notification the user last tapped (e.g. 'daily_agenda').
+  /// The UI listens to this to deep-link to the right screen, then clears it.
+  static final ValueNotifier<String?> selectedPayload =
+      ValueNotifier<String?>(null);
+
+  /// Payload used by the daily agenda summary notification.
+  static const String dailyAgendaPayload = 'daily_agenda';
+
+  /// Payload used by the attendance risk-alert notification.
+  static const String attendanceRiskPayload = 'attendance_risk';
+
+  /// Payload used by the per-class "starts soon" reminder. Tapping it should
+  /// deep-link to the schedule/today view so the student can mark attendance —
+  /// which is exactly what the notification body invites them to do.
+  static const String classReminderPayload = 'class_reminder';
+
   static const _channelId = 'classtrack_reminders';
   static const _channelName = 'Class reminders';
   static const _channelDesc =
       'Reminders when a class is about to start and nudges to mark attendance.';
+
+  // ---- Notification id partitioning ----------------------------------------
+  // Each category gets its own disjoint band that is [_idBand] wide. The
+  // per-entity component is a 20-bit hash (0.._idHashMask == 1,048,575), which
+  // is always smaller than the band width, so a class reminder can NEVER share
+  // an id with a task/exam/habit reminder. The previous scheme let class ids
+  // grow to ~84M and overlap every other band, so a class and (say) an exam
+  // could silently overwrite or cancel one another.
+  static const int _idBand = 2000000;
+  static const int _idHashMask = 0xFFFFF; // 1,048,575
+
+  /// Stable 20-bit hash of [s], kept well under [_idBand].
+  ///
+  /// Uses FNV-1a over the string's UTF-16 code units so the id is byte-stable
+  /// across app restarts and platforms. This is essential: the in-memory id
+  /// tracking (`_classReminderIds`) is empty on a cold start, so the ONLY way a
+  /// reschedule can cancel/overwrite the reminder scheduled by a previous run
+  /// is if the same input always hashes to the same id. `String.hashCode` is
+  /// not guaranteed by the Dart spec to be stable across executions (the VM may
+  /// randomize its hash seed), which would silently orphan every previously
+  /// scheduled reminder after a restart, so we compute the hash explicitly.
+  static int _hash20(String s) {
+    const int fnvOffsetBasis = 0x811c9dc5;
+    const int fnvPrime = 0x01000193;
+    var hash = fnvOffsetBasis;
+    for (final unit in s.codeUnits) {
+      hash = (hash ^ unit) * fnvPrime;
+      hash &= 0xFFFFFFFF; // keep arithmetic within an unsigned 32-bit range
+    }
+    return hash & _idHashMask;
+  }
+
+  /// Notification-ID scheme version. Bump this whenever the id math below
+  /// changes so [_migrateNotificationIdsIfNeeded] clears reminders scheduled
+  /// under the old, now-uncancellable ids (otherwise old recurring reminders
+  /// keep firing forever alongside the new ones).
+  ///
+  /// v3: class reminders now include the class start-time in their id hash, so
+  /// two classes on the same weekday no longer collide. Old v2 ids (keyed by
+  /// subject+weekday only) are cleared once on upgrade.
+  /// v4: the per-entity hash switched from `String.hashCode` to an explicit
+  /// FNV-1a hash for guaranteed cross-restart stability, which changes every
+  /// numeric id once. Clear the v3 reminders so they can't linger un-cancelled.
+  static const int _idSchemeVersion = 4;
+  static const String _idSchemeVersionKey = 'notif_id_scheme_version';
 
   Future<void> init() async {
     if (_ready) return;
@@ -42,9 +125,59 @@ class NotificationService {
       requestSoundPermission: false,
     );
     await _plugin.initialize(
-      const InitializationSettings(android: androidInit, iOS: iosInit),
+      settings: const InitializationSettings(android: androidInit, iOS: iosInit),
+      onDidReceiveNotificationResponse: (resp) {
+        final p = resp.payload;
+        if (p != null && p.isNotEmpty) selectedPayload.value = p;
+      },
     );
+    // Cold start: if the app was launched by tapping a notification, surface
+    // its payload so the UI can deep-link once it's ready.
+    try {
+      final launch = await _plugin.getNotificationAppLaunchDetails();
+      if (launch?.didNotificationLaunchApp ?? false) {
+        final p = launch!.notificationResponse?.payload;
+        if (p != null && p.isNotEmpty) selectedPayload.value = p;
+      }
+    } catch (_) {/* launch details are best-effort */}
+    await _refreshScheduleMode();
+    await _migrateNotificationIdsIfNeeded();
     _ready = true;
+  }
+
+  /// One-time cleanup after an id-scheme change: cancel every locally scheduled
+  /// notification once, so stale/duplicate reminders left under the previous
+  /// (now-uncancellable) id scheme disappear. `reminderSyncProvider`
+  /// reschedules everything under the new ids as soon as the home shell mounts.
+  ///
+  /// Device-global (notification ids are per-device, not per-account), so this
+  /// intentionally uses an unscoped SharedPreferences key. Never throws — a
+  /// failed run simply retries on the next launch.
+  Future<void> _migrateNotificationIdsIfNeeded() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final stored = prefs.getInt(_idSchemeVersionKey) ?? 0;
+      if (stored < _idSchemeVersion) {
+        await _plugin.cancelAll();
+        await prefs.setInt(_idSchemeVersionKey, _idSchemeVersion);
+      }
+    } catch (_) {/* best-effort; retried next launch */}
+  }
+
+  /// Checks whether the OS currently allows exact alarms and upgrades the
+  /// delivery mode accordingly. Safe to call repeatedly; never throws.
+  Future<void> _refreshScheduleMode() async {
+    try {
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (android == null) return; // iOS: exact by nature.
+      final canExact = await android.canScheduleExactNotifications() ?? false;
+      _scheduleMode = canExact
+          ? AndroidScheduleMode.exactAllowWhileIdle
+          : AndroidScheduleMode.inexactAllowWhileIdle;
+    } catch (_) {
+      _scheduleMode = AndroidScheduleMode.inexactAllowWhileIdle;
+    }
   }
 
   /// Ask the OS for permission (Android 13+ and iOS).
@@ -54,10 +187,16 @@ class NotificationService {
         .resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin>()
         ?.requestPermissions(alert: true, badge: true, sound: true);
-    final android = await _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
+    final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    final android = await androidPlugin?.requestNotificationsPermission();
+    // Also request exact-alarm capability so time-critical reminders fire on
+    // time. If the user declines (or the OS disallows it), we keep the inexact
+    // fallback — scheduling still succeeds, just less precise.
+    try {
+      await androidPlugin?.requestExactAlarmsPermission();
+    } catch (_) {/* best-effort; unsupported on older OS versions */}
+    await _refreshScheduleMode();
     return (ios ?? true) || (android ?? true);
   }
 
@@ -72,9 +211,14 @@ class NotificationService {
         iOS: DarwinNotificationDetails(),
       );
 
-  /// Deterministic notification id from subject + weekday.
-  int _idFor(String subjectId, int weekday0) =>
-      (subjectId.hashCode & 0x7fffff) * 10 + weekday0;
+  /// Deterministic notification id for a single recurring class reminder
+  /// (class band = 1). Keyed by subject + weekday + start-time so a subject with
+  /// two classes on the same weekday gets two distinct reminders instead of one
+  /// silently overwriting the other. Stable across runs, so re-scheduling
+  /// overwrites (rather than duplicates) the same reminder.
+  @visibleForTesting
+  static int classReminderId(String subjectId, int weekday0, String startTime) =>
+      1 * _idBand + _hash20('$subjectId#$weekday0#$startTime');
 
   /// Schedule weekly reminders a few minutes before each recurring class.
   Future<void> scheduleForSubject(
@@ -84,6 +228,20 @@ class NotificationService {
     NotificationPrefs? prefs,
   }) async {
     await init();
+    _scheduledClassSubjects.add(subject.id);
+
+    // Cancel every reminder we previously scheduled for this subject before
+    // re-scheduling. Sessions may have been edited (time/day changed) or
+    // removed since the last sync; without this their old ids would linger and
+    // keep firing, because the new ids no longer overwrite them.
+    final previous = _classReminderIds[subject.id];
+    if (previous != null) {
+      for (final oldId in previous) {
+        await _plugin.cancel(id: oldId);
+      }
+    }
+
+    final scheduledIds = <int>{};
     for (final s in sessions) {
       if (!s.recurring || s.dayOfWeek == null) continue;
       final parts = s.startTime.split(':');
@@ -98,31 +256,34 @@ class NotificationService {
         minutesBefore: minutesBefore,
       );
 
-      final id = _idFor(subject.id, s.dayOfWeek!);
+      // Keyed by subject + weekday + start-time so multiple classes on the same
+      // weekday each get their own reminder instead of colliding on one id.
+      final id = classReminderId(subject.id, s.dayOfWeek!, s.startTime);
       // Respect quiet hours: cancel any existing in-window reminder and skip.
       if (prefs != null && prefs.isQuietHour(when.hour)) {
-        await _plugin.cancel(id);
+        await _plugin.cancel(id: id);
         continue;
       }
 
       await _plugin.zonedSchedule(
-        id,
-        '${subject.name} starts soon',
-        s.room != null && s.room!.isNotEmpty
+        id: id,
+        title: '${subject.name} starts soon',
+        body: s.room != null && s.room!.isNotEmpty
             ? 'Starts at ${s.startTime} · Room ${s.room}. Tap to mark attendance.'
             : 'Starts at ${s.startTime}. Tap to mark attendance.',
-        when,
-        _details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
+        scheduledDate: when,
+        notificationDetails: _details,
+        androidScheduleMode: _scheduleMode,
         matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+        payload: classReminderPayload,
       );
+      scheduledIds.add(id);
     }
+    _classReminderIds[subject.id] = scheduledIds;
   }
 
-  /// Task/course/video id namespace, kept distinct from class ids.
-  int _idForTask(String taskId) => 1000000 + (taskId.hashCode & 0x7fffff);
+  /// Task/course/video id band = 2.
+  int _idForTask(String taskId) => 2 * _idBand + _hash20(taskId);
 
   /// Schedule a one-off reminder for each task that has a future due date.
   /// Fires [minutesBefore] before 9:00 AM on the due date.
@@ -141,7 +302,7 @@ class NotificationService {
       if (when.isBefore(now)) continue; // don't schedule in the past
       final id = _idForTask(t.id);
       if (prefs != null && prefs.isQuietHour(when.hour)) {
-        await _plugin.cancel(id);
+        await _plugin.cancel(id: id);
         continue;
       }
       final label = switch (t.type) {
@@ -150,21 +311,19 @@ class NotificationService {
         TaskType.task => 'Task due',
       };
       await _plugin.zonedSchedule(
-        id,
-        '$label: ${t.title}',
-        t.hasLink ? 'Tap to open the link and get started.' : 'Due today.',
-        when,
-        _details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
+        id: id,
+        title: '$label: ${t.title}',
+        body: t.hasLink ? 'Tap to open the link and get started.' : 'Due today.',
+        scheduledDate: when,
+        notificationDetails: _details,
+        androidScheduleMode: _scheduleMode,
       );
     }
   }
 
-  /// Exam id namespaces, kept distinct from class + task ids.
-  int _idForExamDay(String examId) => 2000000 + (examId.hashCode & 0x7fffff);
-  int _idForExamEve(String examId) => 3000000 + (examId.hashCode & 0x7fffff);
+  /// Exam id bands: day-of = 3, eve-before = 4.
+  int _idForExamDay(String examId) => 3 * _idBand + _hash20(examId);
+  int _idForExamEve(String examId) => 4 * _idBand + _hash20(examId);
 
   /// Schedule two reminders per upcoming exam:
   ///  • a "starts soon" reminder [minutesBefore] the exam time, and
@@ -191,19 +350,17 @@ class NotificationService {
       final quietSoon = prefs != null && prefs.isQuietHour(soon.hour);
       if (soon.isAfter(now) && !quietSoon) {
         await _plugin.zonedSchedule(
-          _idForExamDay(e.id),
-          'Exam soon: ${e.title}',
-          e.room != null && e.room!.isNotEmpty
+          id: _idForExamDay(e.id),
+          title: 'Exam soon: ${e.title}',
+          body: e.room != null && e.room!.isNotEmpty
               ? 'Starts at $timeLabel · Room ${e.room}. Good luck!'
               : 'Starts at $timeLabel. Good luck!',
-          soon,
-          _details,
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-          uiLocalNotificationDateInterpretation:
-              UILocalNotificationDateInterpretation.absoluteTime,
+          scheduledDate: soon,
+          notificationDetails: _details,
+          androidScheduleMode: _scheduleMode,
         );
       } else if (quietSoon) {
-        await _plugin.cancel(_idForExamDay(e.id));
+        await _plugin.cancel(id: _idForExamDay(e.id));
       }
 
       final eve = tz.TZDateTime(
@@ -217,42 +374,65 @@ class NotificationService {
       final quietEve = prefs != null && prefs.isQuietHour(eve.hour);
       if (eve.isAfter(now) && !quietEve) {
         await _plugin.zonedSchedule(
-          _idForExamEve(e.id),
-          'Exam tomorrow: ${e.title}',
-          'Your exam is tomorrow at $timeLabel. Time for a final revision!',
-          eve,
-          _details,
-          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-          uiLocalNotificationDateInterpretation:
-              UILocalNotificationDateInterpretation.absoluteTime,
+          id: _idForExamEve(e.id),
+          title: 'Exam tomorrow: ${e.title}',
+          body: 'Your exam is tomorrow at $timeLabel. Time for a final revision!',
+          scheduledDate: eve,
+          notificationDetails: _details,
+          androidScheduleMode: _scheduleMode,
         );
       } else if (quietEve) {
-        await _plugin.cancel(_idForExamEve(e.id));
+        await _plugin.cancel(id: _idForExamEve(e.id));
       }
     }
   }
 
-  Future<void> cancelForSubject(String subjectId) async {    await init();
-    for (var d = 0; d < 7; d++) {
-      await _plugin.cancel(_idFor(subjectId, d));
+  Future<void> cancelForSubject(String subjectId) async {
+    await init();
+    final ids = _classReminderIds.remove(subjectId);
+    if (ids != null) {
+      for (final id in ids) {
+        await _plugin.cancel(id: id);
+      }
     }
+    _scheduledClassSubjects.remove(subjectId);
+  }
+
+  /// Reconcile scheduled class reminders against the set of subjects that still
+  /// exist. Cancels reminders for any subject that has since been deleted (so
+  /// its reminders stop firing), then records [currentSubjectIds] as the new
+  /// baseline. Pass an empty set to cancel everything we've tracked.
+  Future<void> pruneClassReminders(Set<String> currentSubjectIds) async {
+    await init();
+    final stale = _scheduledClassSubjects.difference(currentSubjectIds);
+    for (final subjectId in stale) {
+      final ids = _classReminderIds.remove(subjectId);
+      if (ids != null) {
+        for (final id in ids) {
+          await _plugin.cancel(id: id);
+        }
+      }
+    }
+    _scheduledClassSubjects
+      ..clear()
+      ..addAll(currentSubjectIds);
   }
 
   /// Cancel a task's scheduled reminder (on delete or when marked done).
   Future<void> cancelTask(String taskId) async {
     await init();
-    await _plugin.cancel(_idForTask(taskId));
+    await _plugin.cancel(id: _idForTask(taskId));
   }
 
   /// Cancel an exam's scheduled reminders (both the day-of and eve-before).
   Future<void> cancelExam(String examId) async {
     await init();
-    await _plugin.cancel(_idForExamDay(examId));
-    await _plugin.cancel(_idForExamEve(examId));
+    await _plugin.cancel(id: _idForExamDay(examId));
+    await _plugin.cancel(id: _idForExamEve(examId));
   }
 
-  /// Habit reminder id namespace.
-  int _idForHabit(String habitId) => 4000000 + (habitId.hashCode & 0x7fffff);
+  /// Habit reminder id band = 5.
+  int _idForHabit(String habitId) => 5 * _idBand + _hash20(habitId);
 
   /// Schedule a daily reminder for each habit that has a reminder time set;
   /// cancels reminders for habits that have theirs turned off.
@@ -263,7 +443,7 @@ class NotificationService {
     for (final h in habits) {
       final id = _idForHabit(h.id);
       if (!h.hasReminder) {
-        await _plugin.cancel(id);
+        await _plugin.cancel(id: id);
         continue;
       }
       var when = tz.TZDateTime(
@@ -276,18 +456,16 @@ class NotificationService {
       );
       if (when.isBefore(now)) when = when.add(const Duration(days: 1));
       if (prefs != null && prefs.isQuietHour(when.hour)) {
-        await _plugin.cancel(id);
+        await _plugin.cancel(id: id);
         continue;
       }
       await _plugin.zonedSchedule(
-        id,
-        'Habit reminder: ${h.title}',
-        "Keep your streak alive — don't forget today!",
-        when,
-        _details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
+        id: id,
+        title: 'Habit reminder: ${h.title}',
+        body: "Keep your streak alive — don't forget today!",
+        scheduledDate: when,
+        notificationDetails: _details,
+        androidScheduleMode: _scheduleMode,
         matchDateTimeComponents: DateTimeComponents.time,
       );
     }
@@ -295,11 +473,12 @@ class NotificationService {
 
   Future<void> cancelHabit(String habitId) async {
     await init();
-    await _plugin.cancel(_idForHabit(habitId));
+    await _plugin.cancel(id: _idForHabit(habitId));
   }
 
-  /// Daily agenda summary id (single, repeating).
-  static const int _idDailySummary = 5000000;
+  /// Daily agenda summary id (single, repeating) — its own slot (band 6),
+  /// above every hashed band.
+  static const int _idDailySummary = 6 * _idBand;
 
   /// Schedules (or reschedules) the once-daily agenda summary at [hour]:[minute].
   /// Repeats every day via [DateTimeComponents.time].
@@ -314,26 +493,70 @@ class NotificationService {
     var when = tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
     if (when.isBefore(now)) when = when.add(const Duration(days: 1));
     await _plugin.zonedSchedule(
-      _idDailySummary,
-      title,
-      body,
-      when,
-      _details,
-      androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
+      id: _idDailySummary,
+      title: title,
+      body: body,
+      scheduledDate: when,
+      notificationDetails: _details,
+      androidScheduleMode: _scheduleMode,
       matchDateTimeComponents: DateTimeComponents.time,
+      payload: dailyAgendaPayload,
     );
   }
 
   Future<void> cancelDailySummary() async {
     await init();
-    await _plugin.cancel(_idDailySummary);
+    await _plugin.cancel(id: _idDailySummary);
+  }
+
+  /// Attendance risk-alert id (single, one-shot per reschedule) — band 7, above
+  /// every hashed band and the daily summary slot.
+  static const int _idAttendanceRisk = 7 * _idBand;
+
+  /// Schedules a one-off attendance risk alert at [hour]:[minute] (today if
+  /// still ahead, otherwise tomorrow). Unlike the daily summary this does NOT
+  /// repeat — the reminder scheduler recomputes the risk and reschedules it
+  /// whenever attendance or the timetable changes, so the body is always fresh.
+  /// Suppressed (and any pending one cancelled) during quiet hours.
+  Future<void> scheduleAttendanceRiskAlert({
+    required int hour,
+    required int minute,
+    required String title,
+    required String body,
+    NotificationPrefs? prefs,
+  }) async {
+    await init();
+    final now = tz.TZDateTime.now(tz.local);
+    var when =
+        tz.TZDateTime(tz.local, now.year, now.month, now.day, hour, minute);
+    if (when.isBefore(now)) when = when.add(const Duration(days: 1));
+    if (prefs != null && prefs.isQuietHour(when.hour)) {
+      await _plugin.cancel(id: _idAttendanceRisk);
+      return;
+    }
+    await _plugin.zonedSchedule(
+      id: _idAttendanceRisk,
+      title: title,
+      body: body,
+      scheduledDate: when,
+      notificationDetails: _details,
+      androidScheduleMode: _scheduleMode,
+      payload: attendanceRiskPayload,
+    );
+  }
+
+  Future<void> cancelAttendanceRiskAlert() async {
+    await init();
+    await _plugin.cancel(id: _idAttendanceRisk);
   }
 
   Future<void> cancelAll() async {
     await init();
     await _plugin.cancelAll();
+    // Reset the in-memory baseline so a stale set from the previous account
+    // can't suppress the next user's prune/reschedule on a shared device.
+    _scheduledClassSubjects.clear();
+    _classReminderIds.clear();
   }
 
   tz.TZDateTime _nextInstanceOfWeekdayTime({
@@ -341,22 +564,44 @@ class NotificationService {
     required int hour,
     required int minute,
     required int minutesBefore,
-  }) {
-    final now = tz.TZDateTime.now(tz.local);
-    var scheduled = tz.TZDateTime(
-      tz.local,
-      now.year,
-      now.month,
-      now.day,
-      hour,
-      minute,
-    ).subtract(Duration(minutes: minutesBefore));
+  }) =>
+      nextInstanceOfWeekdayTime(
+        now: tz.TZDateTime.now(tz.local),
+        weekday0: weekday0,
+        hour: hour,
+        minute: minute,
+        minutesBefore: minutesBefore,
+      );
 
-    // Advance to the correct weekday (DateTime.weekday is 1..7, weekday0 is 0..6).
-    while ((scheduled.weekday - 1) != weekday0 || scheduled.isBefore(now)) {
-      scheduled = scheduled.add(const Duration(days: 1));
+  /// Returns the next reminder instant: [minutesBefore] before the next
+  /// occurrence of a class on [weekday0] (0=Mon..6=Sun) at [hour]:[minute].
+  ///
+  /// The weekday is aligned to the *class start time* first, and only then is
+  /// the lead subtracted. Doing it the other way round is wrong for classes
+  /// near midnight: e.g. a 00:05 class with a 10-minute lead reminds at 23:55
+  /// the previous day, so subtracting first shifts the timestamp onto the wrong
+  /// weekday. Aligning the reminder's own weekday to the class weekday then
+  /// lands it ~24h late and mis-anchors the weekly repeat
+  /// ([DateTimeComponents.dayOfWeekAndTime] keys off this instant's weekday).
+  @visibleForTesting
+  static tz.TZDateTime nextInstanceOfWeekdayTime({
+    required tz.TZDateTime now,
+    required int weekday0,
+    required int hour,
+    required int minute,
+    required int minutesBefore,
+  }) {
+    // Align to the class start on the correct weekday whose reminder is still
+    // in the future (DateTime.weekday is 1..7, weekday0 is 0..6).
+    var classStart =
+        tz.TZDateTime(now.location, now.year, now.month, now.day, hour, minute);
+    while ((classStart.weekday - 1) != weekday0 ||
+        classStart.subtract(Duration(minutes: minutesBefore)).isBefore(now)) {
+      classStart = classStart.add(const Duration(days: 1));
     }
-    return scheduled;
+    // Now subtract the lead — this may legitimately cross back over midnight
+    // (and onto the previous weekday), which is exactly the desired reminder.
+    return classStart.subtract(Duration(minutes: minutesBefore));
   }
 }
 

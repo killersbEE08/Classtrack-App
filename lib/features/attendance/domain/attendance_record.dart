@@ -37,6 +37,49 @@ extension AttendanceStatusX on AttendanceStatus {
   }
 }
 
+/// The change each of a subject's aggregate counters must undergo when a single
+/// occurrence moves from [oldStatus] to [newStatus]. Pure and side-effect free
+/// so it can be unit-tested and reused by the offline-safe write path (which
+/// applies these as `FieldValue.increment` deltas instead of re-reading and
+/// rewriting absolute totals inside a network-only transaction).
+///
+/// `held` is intentionally not returned: it is always `attended + absent`.
+({int attended, int absent, int cancelled}) attendanceCounterDelta(
+  AttendanceStatus oldStatus,
+  AttendanceStatus newStatus,
+) {
+  int attended = 0, absent = 0, cancelled = 0;
+  // Remove the old status' contribution...
+  switch (oldStatus) {
+    case AttendanceStatus.present:
+      attended--;
+      break;
+    case AttendanceStatus.absent:
+      absent--;
+      break;
+    case AttendanceStatus.cancelled:
+      cancelled--;
+      break;
+    case AttendanceStatus.unmarked:
+      break;
+  }
+  // ...then add the new status' contribution.
+  switch (newStatus) {
+    case AttendanceStatus.present:
+      attended++;
+      break;
+    case AttendanceStatus.absent:
+      absent++;
+      break;
+    case AttendanceStatus.cancelled:
+      cancelled++;
+      break;
+    case AttendanceStatus.unmarked:
+      break;
+  }
+  return (attended: attended, absent: absent, cancelled: cancelled);
+}
+
 /// One attendance mark for a subject on a date.
 ///
 /// Stored at users/{uid}/subjects/{subjectId}/attendance/{recordId}.

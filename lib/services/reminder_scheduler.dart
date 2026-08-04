@@ -3,13 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/providers/app_settings_provider.dart';
 import '../core/providers/notification_prefs_provider.dart';
+import '../core/constants/app_constants.dart';
 import '../core/theme/app_colors.dart';
 import '../core/utils/date_utils.dart';
+import '../features/auth/presentation/providers/auth_providers.dart';
 import '../features/exams/presentation/providers/exam_providers.dart';
 import '../features/habits/presentation/providers/habit_providers.dart';
+import '../features/insights/domain/insight_math.dart';
 import '../features/schedule/domain/class_session.dart';
 import '../features/schedule/presentation/providers/schedule_providers.dart';
 import '../features/subjects/domain/subject.dart';
+import '../features/subjects/presentation/providers/subject_providers.dart';
 import '../features/subscription/presentation/providers/subscription_providers.dart';
 import '../features/tasks/presentation/providers/task_providers.dart';
 import 'notification_service.dart';
@@ -39,6 +43,10 @@ final reminderSyncProvider = Provider<void>((ref) {
     subjectsById[sc.subject.id] = sc.subject;
   }
   if (prefs.classes) {
+    // Cancel reminders for subjects removed/deleted since the last sync so they
+    // don't keep firing, then (re)schedule reminders for the current subjects.
+    final currentSubjectIds = sessionsBySubject.keys.toSet();
+    service.pruneClassReminders(currentSubjectIds);
     for (final entry in sessionsBySubject.entries) {
       final subject = subjectsById[entry.key];
       if (subject != null) {
@@ -47,6 +55,9 @@ final reminderSyncProvider = Provider<void>((ref) {
       }
     }
   } else {
+    // Class reminders disabled: cancel everything we've tracked (including any
+    // now-deleted subjects) plus the current ones, and clear the baseline.
+    service.pruneClassReminders(<String>{});
     for (final id in sessionsBySubject.keys) {
       service.cancelForSubject(id);
     }
@@ -105,10 +116,71 @@ final reminderSyncProvider = Provider<void>((ref) {
       hour: prefs.summaryHour,
       minute: prefs.summaryMinute,
       title: 'Your day at a glance',
-      body: 'Today: ${parts.join(' · ')}. Tap to plan your day.',
+      body: 'Today: ${parts.join(' · ')}. Tap to view & download your summary.',
     );
   } else {
     service.cancelDailySummary();
+  }
+
+  // ── Attendance risk alerts (Pro) ─────────────────────────────────────────
+  // Reuses the "smart daily notifications" toggle (dailySummary) as the opt-in
+  // so there's no extra setting to hunt for. The evening before, if skipping a
+  // class scheduled tomorrow would push a subject below the user's target, we
+  // send one actionable heads-up. Recomputed on every data change, so the body
+  // is always current; cancelled when nothing is at risk.
+  if (isPro && prefs.dailySummary) {
+    final subjects = ref.watch(subjectsStreamProvider).valueOrNull ?? const [];
+    final target = ref
+            .watch(userProfileProvider)
+            .valueOrNull
+            ?.targetAttendancePercent ??
+        AppConstants.defaultTargetAttendance;
+    final now = DateTime.now();
+    final tomorrow =
+        DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+
+    // How many of each subject's classes fall tomorrow.
+    final tomorrowCount = <String, int>{};
+    for (final sc in scheduledClasses) {
+      if (sc.session.occursOn(tomorrow)) {
+        tomorrowCount[sc.subject.id] = (tomorrowCount[sc.subject.id] ?? 0) + 1;
+      }
+    }
+
+    final atRisk = <AttendanceRiskAlert>[];
+    for (final s in subjects) {
+      final upcoming = tomorrowCount[s.id] ?? 0;
+      if (upcoming == 0) continue; // no class tomorrow -> nothing to warn about
+      final alert = attendanceRiskAlert(
+        subjectName: s.name,
+        attended: s.attended,
+        held: s.held,
+        target: s.effectiveTarget(target),
+        upcomingCount: upcoming,
+      );
+      if (alert.level == AttendanceRiskLevel.danger) atRisk.add(alert);
+    }
+
+    if (atRisk.isNotEmpty) {
+      final t = target.toStringAsFixed(0);
+      final title = atRisk.length == 1
+          ? '${atRisk.first.subjectName} attendance at risk'
+          : '${atRisk.length} subjects at risk tomorrow';
+      final body = atRisk.length == 1
+          ? atRisk.first.message
+          : 'Missing tomorrow’s classes could drop ${atRisk.map((a) => a.subjectName).take(3).join(', ')} below your $t% target.';
+      service.scheduleAttendanceRiskAlert(
+        hour: 20,
+        minute: 0,
+        title: title,
+        body: body,
+        prefs: prefs,
+      );
+    } else {
+      service.cancelAttendanceRiskAlert();
+    }
+  } else {
+    service.cancelAttendanceRiskAlert();
   }
 });
 

@@ -59,7 +59,7 @@ flutter analyze
 
 1. Create a Firebase project at https://console.firebase.google.com.
 2. **Lock in the package name / bundle ID before anything else** — this app uses
-   `com.classtrack.app` and it **cannot be changed after publishing**.
+   `com.classtracks.app` and it **cannot be changed after publishing**.
 3. Enable these products in the console:
    - **Authentication** → Email/Password **and** Google.
    - **Cloud Firestore** (production mode).
@@ -219,5 +219,5 @@ users/{uid}/subjects/{id}/attendance/{dateId}  date, status(present|absent|cance
 
 ## 8. Package name / bundle ID
 
-`com.classtrack.app` — **decide and lock this before creating the Firebase project**; it cannot be
+`com.classtracks.app` — **decide and lock this before creating the Firebase project**; it cannot be
 changed after you publish to the stores.

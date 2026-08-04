@@ -11,6 +11,7 @@ import '../../../../core/providers/notification_prefs_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../exams/presentation/providers/exam_providers.dart';
+import '../../../insights/presentation/screens/daily_agenda_screen.dart';
 import '../../../insights/presentation/screens/insights_screen.dart';
 import '../../../moments/presentation/screens/moments_screen.dart';
 import '../../../referral/presentation/screens/referral_screen.dart';
@@ -21,6 +22,7 @@ import '../../../../services/notification_service.dart';
 import '../../../subscription/domain/pro_constants.dart';
 import '../../../subscription/presentation/providers/subscription_providers.dart';
 import '../../../subscription/presentation/screens/paywall_screen.dart';
+import '../../../subscription/presentation/screens/pro_status_screen.dart';
 import 'privacy_policy_screen.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -59,6 +61,28 @@ class SettingsScreen extends ConsumerWidget {
                 if (ref.read(isProProvider)) {
                   Navigator.of(context).push(MaterialPageRoute(
                       builder: (_) => const InsightsScreen()));
+                } else {
+                  await showPaywall(context);
+                }
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+          _sectionLabel(theme, 'Daily agenda'),
+          _card(
+            theme,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.auto_awesome_rounded,
+                  color: AppColors.primary),
+              title: const Text('AI daily summary'),
+              subtitle: const Text(
+                  'A smart briefing of your day — read it & download as PDF'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () async {
+                if (ref.read(isProProvider)) {
+                  Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const DailyAgendaScreen()));
                 } else {
                   await showPaywall(context);
                 }
@@ -105,13 +129,15 @@ class SettingsScreen extends ConsumerWidget {
               children: [
                 Row(
                   children: [
-                    const Text('Target attendance'),
+                    const Text('Default attendance target'),
                     const Spacer(),
                     Text('${target.toStringAsFixed(0)}%',
                         style: theme.textTheme.titleMedium
                             ?.copyWith(color: AppColors.primary)),
                   ],
                 ),
+                Text('Used for every subject unless you set a custom target on it.',
+                    style: theme.textTheme.bodySmall),
                 Slider(
                   value: target.clamp(50, 100),
                   min: 50,
@@ -206,6 +232,7 @@ class SettingsScreen extends ConsumerWidget {
                               await ref
                                   .read(reminderLeadProvider.notifier)
                                   .set(m);
+                              if (!context.mounted) return;
                               await _enableNotifications(context, ref,
                                   silent: true);
                               if (context.mounted) {
@@ -268,7 +295,7 @@ class SettingsScreen extends ConsumerWidget {
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(PhosphorIcons.info(), color: AppColors.primary),
                   title: const Text('Version'),
-                  trailing: const Text('1.0.0'),
+                  trailing: const Text('1.0.14'),
                 ),
               ],
             ),
@@ -470,13 +497,10 @@ class SettingsScreen extends ConsumerWidget {
           leading: const Icon(Icons.workspace_premium_rounded,
               color: AppColors.primary),
           title: const Text('Pro active'),
-          subtitle: const Text('Thanks for supporting ClassTrack 💜'),
-          trailing: TextButton(
-            onPressed: () async {
-              await ref.read(subscriptionServiceProvider).restore();
-            },
-            child: const Text('Restore'),
-          ),
+          subtitle: const Text('View your subscription, renewal & restore'),
+          trailing: const Icon(Icons.chevron_right_rounded),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => const ProStatusScreen())),
         ),
       );
     }

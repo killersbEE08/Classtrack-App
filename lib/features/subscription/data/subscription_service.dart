@@ -116,8 +116,12 @@ class SubscriptionService {
   Future<bool> purchase(Package package) async {
     if (!_configured) return false;
     try {
-      final info = await Purchases.purchasePackage(package);
-      _onCustomerInfo(info);
+      // purchases_flutter 9.0.0+ returns a PurchaseResult (customerInfo +
+      // storeTransaction) instead of a bare CustomerInfo, and `purchasePackage`
+      // is deprecated in favour of `purchase(PurchaseParams)`.
+      final result =
+          await Purchases.purchase(PurchaseParams.package(package));
+      _onCustomerInfo(result.customerInfo);
       return _isPro;
     } on PlatformException catch (e) {
       final code = PurchasesErrorHelper.getErrorCode(e);
@@ -125,6 +129,61 @@ class SubscriptionService {
       throw SubscriptionException(_messageFor(code));
     }
   }
+
+  /// Reads the active entitlement's full details (purchase/expiry dates, store,
+  /// renewal state, management URL) for the Pro status screen. Returns null
+  /// when subscriptions aren't configured, no entitlement is active, or the
+  /// lookup fails — the UI then falls back to the server-trusted entitlement
+  /// (e.g. a referral/promo grant, which isn't a store purchase).
+  Future<ProDetails?> fetchDetails({bool invalidateCache = false}) async {
+    if (!_configured) return null;
+    try {
+      if (invalidateCache) {
+        await Purchases.invalidateCustomerInfoCache();
+      }
+      final info = await Purchases.getCustomerInfo();
+      final active = info.entitlements.active;
+      // Prefer the configured entitlement id, but fall back to any active one
+      // (mirrors _onCustomerInfo, which stays robust to the entitlement's name).
+      final ent = active[ProConstants.entitlementId] ??
+          (active.isNotEmpty ? active.values.first : null);
+      if (ent == null) return null;
+      DateTime? parse(String? s) =>
+          (s == null || s.isEmpty) ? null : DateTime.tryParse(s)?.toLocal();
+      return ProDetails(
+        active: ent.isActive,
+        willRenew: ent.willRenew,
+        inTrial: ent.periodType == PeriodType.trial,
+        isSandbox: ent.isSandbox,
+        hasBillingIssue: ent.billingIssueDetectedAt != null,
+        cancelled: ent.unsubscribeDetectedAt != null,
+        purchaseDate: parse(ent.originalPurchaseDate),
+        latestRenewalDate: parse(ent.latestPurchaseDate),
+        expirationDate: parse(ent.expirationDate),
+        storeLabel: _storeLabel(ent.store),
+        productIdentifier: ent.productIdentifier,
+        managementUrl: info.managementURL,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Friendly, user-facing name for a RevenueCat [Store]. Keeps the SDK enum
+  /// out of the UI layer.
+  String _storeLabel(Store store) => switch (store) {
+        Store.playStore => 'Google Play',
+        Store.appStore || Store.macAppStore => 'App Store',
+        Store.stripe => 'Stripe',
+        Store.amazon => 'Amazon Appstore',
+        Store.promotional => 'Promo',
+        Store.rcBilling => 'Web',
+        Store.paddle => 'Paddle',
+        Store.galaxy => 'Galaxy Store',
+        Store.testStore => 'Test store',
+        Store.externalStore => 'External store',
+        _ => 'Store',
+      };
 
   /// Restores previous purchases (required by both stores). Returns true when
   /// a Pro entitlement was found.
@@ -159,4 +218,61 @@ class SubscriptionException implements Exception {
   const SubscriptionException(this.message);
   @override
   String toString() => message;
+}
+
+/// A read-only snapshot of the user's active Pro subscription, surfaced on the
+/// Pro status screen. Dates are already parsed to local [DateTime]s and the
+/// store is a friendly label, so the UI never touches the RevenueCat SDK.
+class ProDetails {
+  /// Whether the entitlement is currently active.
+  final bool active;
+
+  /// True if the subscription is set to auto-renew at [expirationDate].
+  final bool willRenew;
+
+  /// True while the user is in a free-trial / introductory period.
+  final bool inTrial;
+
+  /// True for sandbox/test purchases (not a real production buy).
+  final bool isSandbox;
+
+  /// True if the store reported a billing problem (payment failing). Access may
+  /// still be active during the grace period.
+  final bool hasBillingIssue;
+
+  /// True if the user turned off auto-renew but still has access until expiry.
+  final bool cancelled;
+
+  /// First time this subscription was purchased.
+  final DateTime? purchaseDate;
+
+  /// Most recent purchase/renewal date.
+  final DateTime? latestRenewalDate;
+
+  /// When access ends (or renews). Null for lifetime/non-expiring access.
+  final DateTime? expirationDate;
+
+  /// Friendly store name, e.g. "Google Play" or "App Store".
+  final String storeLabel;
+
+  /// The purchased product identifier (SKU).
+  final String productIdentifier;
+
+  /// Deep link to manage the subscription in the store, when available.
+  final String? managementUrl;
+
+  const ProDetails({
+    required this.active,
+    required this.willRenew,
+    required this.inTrial,
+    required this.isSandbox,
+    required this.hasBillingIssue,
+    required this.cancelled,
+    required this.purchaseDate,
+    required this.latestRenewalDate,
+    required this.expirationDate,
+    required this.storeLabel,
+    required this.productIdentifier,
+    required this.managementUrl,
+  });
 }

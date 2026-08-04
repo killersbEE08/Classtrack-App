@@ -10,6 +10,7 @@ import '../../../../shared/widgets/ui_kit.dart';
 import '../../../exams/domain/exam.dart';
 import '../../../exams/presentation/providers/exam_providers.dart';
 import '../../../exams/presentation/screens/exams_screen.dart';
+import '../../../import/presentation/screens/import_entry.dart';
 import '../../../schedule/presentation/providers/schedule_providers.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../../tasks/domain/task_item.dart';
@@ -65,6 +66,11 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
                 const SizedBox(width: 12),
                 Text('Calendar', style: theme.textTheme.titleLarge),
                 const Spacer(),
+                RoundIconButton(
+                  icon: Icons.file_download_outlined,
+                  onTap: () => showImportOptions(context, ref),
+                ),
+                const SizedBox(width: 8),
                 TextButton(
                   onPressed: () => setState(() {
                     _focused = DateTime.now();

@@ -129,6 +129,20 @@ final proEntitlementProvider = StreamProvider<ProEntitlement>((ref) {
       .map((snap) => parseEntitlement(snap.data()));
 });
 
+/// One-shot fetch of the active subscription's store details (purchase/expiry
+/// dates, renewal state, store, management URL) for the Pro status screen.
+///
+/// Returns null when subscriptions aren't configured or the user's Pro comes
+/// from a server-side grant (a referral reward / promo written to
+/// `_entitlements/{uid}`) rather than an actual store purchase — in that case
+/// the screen shows the [proEntitlementProvider] details instead. Re-fetches
+/// automatically whenever the live entitlement state flips.
+final proDetailsProvider =
+    FutureProvider.autoDispose<ProDetails?>((ref) async {
+  ref.watch(proStatusProvider);
+  return ref.watch(subscriptionServiceProvider).fetchDetails();
+});
+
 /// Keeps RevenueCat's identity in sync with Firebase auth: logs the user in to
 /// RevenueCat when they sign in, and out when they sign out. Watch this once
 /// (e.g. in HomeShell) so entitlements follow the account across devices.

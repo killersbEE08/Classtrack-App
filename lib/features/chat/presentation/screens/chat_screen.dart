@@ -411,24 +411,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _suggestionChips(ThemeData theme) {
+    Widget chip(String label, VoidCallback onTap, {IconData? icon}) => Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: ActionChip(
+            avatar: icon != null
+                ? Icon(icon, size: 16, color: AppColors.primary)
+                : null,
+            label: Text(label),
+            backgroundColor: AppColors.primary.withValues(alpha: 0.10),
+            side: BorderSide.none,
+            labelStyle: theme.textTheme.bodySmall?.copyWith(
+                color: AppColors.primary, fontWeight: FontWeight.w600),
+            onPressed: onTap,
+          ),
+        ).animate().fadeIn(duration: 300.ms).slideX(begin: 0.2);
+
     return SizedBox(
       height: 44,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         children: [
-          for (final s in _suggestions)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ActionChip(
-                label: Text(s),
-                backgroundColor: AppColors.primary.withOpacity(0.10),
-                side: BorderSide.none,
-                labelStyle: theme.textTheme.bodySmall
-                    ?.copyWith(color: AppColors.primary, fontWeight: FontWeight.w600),
-                onPressed: () => _send(s),
-              ),
-            ).animate().fadeIn(duration: 300.ms).slideX(begin: 0.2),
+          // Opens the gallery so the assistant can read a timetable photo.
+          chip('Import schedule from image', _attachImage,
+              icon: Icons.photo_library_rounded),
+          for (final s in _suggestions) chip(s, () => _send(s)),
         ],
       ),
     );

@@ -14,6 +14,7 @@ import { defineSecret } from "firebase-functions/params";
 import { initializeApp } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 initializeApp();
@@ -125,6 +126,8 @@ Return ONLY valid JSON that matches this exact shape — no prose, no markdown f
     {
       "name": string,
       "professor": string | null,
+      "startDate": "YYYY-MM-DD" | null,
+      "endDate": "YYYY-MM-DD" | null,
       "sessions": [
         { "day": "Monday"|"Tuesday"|"Wednesday"|"Thursday"|"Friday"|"Saturday"|"Sunday",
           "start": "HH:MM" (24-hour),
@@ -139,6 +142,7 @@ Rules:
 - Merge repeated classes of the same subject into one subject with multiple sessions.
 - Convert all times to 24-hour HH:MM. If only a start time is given, set end = start + 1 hour.
 - Use null (not empty string) when a professor or room is unknown.
+- TERM DATES: If the timetable states a semester/term/course date range (e.g. "Winter semester 2026: classes run from January 6 to March 21, 2026"), set "startDate" and "endDate" (as YYYY-MM-DD) on EVERY subject it applies to. Infer the year from the timetable when given; otherwise use null. Use null for startDate/endDate when no such range is stated — never guess a range.
 - Set "confidence" to how sure you are the extraction is correct.
 - If nothing can be parsed, return {"subjects": [], "confidence": "low"}.
 - Only include classes explicitly present in the input. NEVER invent sessions, NEVER fill every day of the week, and NEVER guess times or copy one class across all seven days.
@@ -165,12 +169,13 @@ SCHEDULE: When the user gives enough info to build/change their timetable (from 
 {
   "subjects": [
     { "name": string, "professor": string | null,
+      "startDate": "YYYY-MM-DD" | null, "endDate": "YYYY-MM-DD" | null,
       "sessions": [ { "day": "Monday".."Sunday", "start": "HH:MM" (24h), "end": "HH:MM" (24h), "room": string | null } ] }
   ],
   "confidence": "high" | "medium" | "low"
 }
 \`\`\`
-Merge repeated classes into one subject with multiple sessions; convert times to 24h HH:MM; if only a start time is given set end = start + 1 hour; use null for unknown professor/room. Only include the schedule block when you actually have timetable data. NEVER invent sessions, NEVER fill all seven days, and NEVER guess times — include only the exact days and times the user stated. If the user only expresses a vague wish to study a topic (not a real timetable with days/times), do NOT produce a schedule; ask which days and times instead.
+Merge repeated classes into one subject with multiple sessions; convert times to 24h HH:MM; if only a start time is given set end = start + 1 hour; use null for unknown professor/room. TERM DATES: if the user (or the image) gives a semester/term/course date range — e.g. "Winter semester 2026, classes from January 6 to March 21" — set "startDate" and "endDate" (YYYY-MM-DD) on EVERY subject that range covers; infer the year from what's given. Use null when no range is stated; never invent one. Only include the schedule block when you actually have timetable data. NEVER invent sessions, NEVER fill all seven days, and NEVER guess times — include only the exact days and times the user stated. If the user only expresses a vague wish to study a topic (not a real timetable with days/times), do NOT produce a schedule; ask which days and times instead.
 
 ACTIONS (invisible automation): When the user's message clearly asks to log or schedule something, ALSO append a fenced code block labelled \`actions\` containing ONLY this JSON. The app runs these silently to update the UI, so keep your visible reply to one short, warm confirmation sentence (e.g. "Done — logged ₹20 for food." or "Added your DP-800 exam for tomorrow."). Never mention JSON, code, or "actions".
 \`\`\`actions
@@ -179,27 +184,29 @@ ACTIONS (invisible automation): When the user's message clearly asks to log or s
   { "type": "exam", "title": string, "date": "YYYY-MM-DD", "time": "HH:MM"|null, "subject": string|null, "room": string|null, "note": string|null },
   { "type": "task", "title": string, "dueDate": "YYYY-MM-DD"|null, "priority": "low"|"medium"|"high", "taskType": "task"|"course"|"video", "subject": string|null },
   { "type": "note", "title": string, "body": string, "subject": string|null },
-  { "type": "subject", "name": string, "color": "#RRGGBB"|null, "icon": string|null },
+  { "type": "subject", "name": string, "color": "#RRGGBB"|null, "icon": string|null, "startDate": "YYYY-MM-DD"|null, "endDate": "YYYY-MM-DD"|null },
   { "type": "grade", "title": string, "score": number, "maxScore": number, "weight": number|null, "subject": string|null },
   { "type": "class", "subject": string, "day": "Monday".."Sunday", "start": "HH:MM", "end": "HH:MM", "room": string|null },
   { "type": "habit", "title": string, "color": "#RRGGBB"|null },
   { "type": "habitCheck", "match": string },
+  { "type": "study", "minutes": number, "subject": string|null, "date": "YYYY-MM-DD"|null },
   { "type": "attendance", "subject": string, "status": "present"|"absent"|"cancelled", "date": "YYYY-MM-DD"|null },
   { "type": "budget", "amount": number },
   { "type": "linkNote", "noteTitle": string, "examTitle": string },
-  { "type": "update", "entity": "task"|"exam"|"expense"|"note"|"grade"|"subject"|"class"|"habit", "match": string, "amount": number|null, "category": string|null, "newTitle": string|null, "newName": string|null, "note": string|null, "body": string|null, "dueDate": "YYYY-MM-DD"|null, "date": "YYYY-MM-DD"|null, "time": "HH:MM"|null, "priority": "low"|"medium"|"high"|null, "taskType": "task"|"course"|"video"|null, "done": boolean|null, "newAmount": number|null, "newCategory": string|null, "score": number|null, "maxScore": number|null, "weight": number|null, "room": string|null, "color": "#RRGGBB"|null, "icon": string|null, "subject": string|null, "day": "Monday".."Sunday"|null, "start": "HH:MM"|null, "end": "HH:MM"|null, "newDay": "Monday".."Sunday"|null },
+  { "type": "update", "entity": "task"|"exam"|"expense"|"note"|"grade"|"subject"|"class"|"habit", "match": string, "amount": number|null, "category": string|null, "newTitle": string|null, "newName": string|null, "note": string|null, "body": string|null, "dueDate": "YYYY-MM-DD"|null, "date": "YYYY-MM-DD"|null, "time": "HH:MM"|null, "priority": "low"|"medium"|"high"|null, "taskType": "task"|"course"|"video"|null, "done": boolean|null, "newAmount": number|null, "newCategory": string|null, "score": number|null, "maxScore": number|null, "weight": number|null, "room": string|null, "color": "#RRGGBB"|null, "icon": string|null, "startDate": "YYYY-MM-DD"|null, "endDate": "YYYY-MM-DD"|null, "subject": string|null, "day": "Monday".."Sunday"|null, "start": "HH:MM"|null, "end": "HH:MM"|null, "newDay": "Monday".."Sunday"|null },
   { "type": "delete", "entity": "task"|"exam"|"expense"|"note"|"grade"|"subject"|"class"|"habit", "match": string, "amount": number|null, "category": "food"|"transport"|"books"|"rent"|"fun"|"health"|"other"|null, "subject": string|null, "day": "Monday".."Sunday"|null }
 ] }
 \`\`\`
 Rules for actions:
 - Resolve ALL relative dates ("today", "tomorrow", "next Monday", "in 3 days") to an absolute YYYY-MM-DD using the "Today is …" line in the user's data. Never output relative words in the JSON.
-- CREATE: "I spent 20 on food" → expense. "exam of DP-800 tomorrow" → exam. homework/to-dos → task. "make a note …" → note. "add a subject called Physics" → subject. "I got 18/20 in the quiz for Maths" → grade. "add a Maths class Monday 9-10" → class. "add a habit to drink water" → habit.
+- CREATE: "I spent 20 on food" → expense. "exam of DP-800 tomorrow" → exam. homework/to-dos → task. "make a note …" → note. "add a subject called Physics" → subject (include startDate/endDate as YYYY-MM-DD when the user gives the subject's/term's date range, else null). "I got 18/20 in the quiz for Maths" → grade. "add a Maths class Monday 9-10" → class. "add a habit to drink water" → habit.
 - HABITS: "add a habit …" → habit. "mark my water habit as done" / "I did my reading habit today" → habitCheck (match = the habit's title). "delete the gym habit" → delete entity "habit".
+- STUDY: "I studied 45 minutes of Maths", "log 2 hours of focus yesterday" → study. Give "minutes" as whole minutes (convert hours → minutes) and resolve any date to YYYY-MM-DD.
 - ATTENDANCE: "mark me present in Maths today" / "I attended DBMS" / "I missed Physics" → attendance (absent = missed). Only use a subject name present in the user's data.
 - UPDATE: "rename my DBMS assignment to …", "change the DP-800 exam to Friday", "mark the essay task done", "change Physics color" → an update action. "match" is the current title/name; put changed fields in the matching keys (newTitle/newName for renames). For an expense, identify it with "match" (its title) and/or "amount" and "category" (e.g. the 20 food expense → amount 20, category "food"), and put any changes in newTitle/newAmount/newCategory. To move/edit a class ("change my Monday Maths class to 11:00", "move DBMS to Tuesday"), use entity "class" with subject + day to find it and start/end/newDay/room for the changes.
 - DELETE: "delete the Maths quiz grade", "remove the DP-800 exam", "delete the Physics subject", "remove my Monday Maths class", "delete the gym habit" → a delete action with entity + match (for a class, give subject + day). For an expense, ALWAYS include the "amount" and "category" when the user mentions them ("delete the 20 rupees food transaction" → entity "expense", amount 20, category "food"), since expenses often have no distinctive title.
 - BUDGET: "set my budget to 5000" → budget.
-- You have full read access to the user's data below (attendance, subjects & schedule, tasks, exams, grades by subject, notes, expenses with a category-wise breakdown, study time, habits). Answer data questions directly from it; never claim you lack a breakdown when the category data is present.
+- You have full read access to the user's data below (attendance incl. this week, subjects & schedule, tasks, exams both upcoming AND past, grades by subject, notes, expenses with a category-wise breakdown AND previous-month history, study time incl. history, habits). This includes HISTORICAL data — answer questions about last month, previous months and past items directly from it, and never claim you lack history or a breakdown when the data is present. You can also CREATE, UPDATE and DELETE items across EVERY feature (tasks, classes, subjects, exams, grades, notes, expenses, habits, attendance and study), not just the current period.
 - Match update/delete targets by the names/titles shown in the user's data. If nothing matches, don't emit the action — ask a short clarifying question instead.
 - Only include the actions block when the user actually wants to record or change something. For questions, tips or chit-chat, omit it entirely.`;
 
@@ -223,6 +230,12 @@ function dropHallucinatedWeek(sessions) {
 
 function sanitize(parsed) {
   const subjects = Array.isArray(parsed?.subjects) ? parsed.subjects : [];
+  // Accepts "YYYY-MM-DD" only; anything else becomes null so the client never
+  // has to defend against malformed term dates.
+  const cleanDate = (v) =>
+    typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.trim())
+      ? v.trim()
+      : null;
   const cleanSubjects = subjects
     .map((s) => {
       const sessions = Array.isArray(s?.sessions) ? s.sessions : [];
@@ -237,6 +250,8 @@ function sanitize(parsed) {
       return {
         name: typeof s?.name === "string" ? s.name.trim() : "Untitled",
         professor: s?.professor ?? null,
+        startDate: cleanDate(s?.startDate),
+        endDate: cleanDate(s?.endDate),
         sessions: dropHallucinatedWeek(cleanSessions),
       };
     })
@@ -634,6 +649,42 @@ export const getReferralInfo = onCall({ cors: true }, async (request) => {
   });
 
   return result;
+});
+
+/**
+ * deleteAccount — full, compliant account deletion.
+ *
+ * Runs with Admin privileges so it can (1) recursively delete the ENTIRE
+ * users/{uid} document tree (subjects/sessions/attendance, tasks, exams,
+ * habits, notes, expenses, grades, studySessions, chatSessions, usage — every
+ * subcollection), (2) delete the server-only _entitlements/{uid} and
+ * _aiUsage/{uid} docs the client can't touch, and (3) delete the Firebase Auth
+ * user itself — with NO "requires-recent-login" problem (that only affects the
+ * client SDK). Doing it server-side also avoids the old client bug where data
+ * was wiped BEFORE user.delete(), leaving an emptied-but-live account when the
+ * delete step failed.
+ */
+export const deleteAccount = onCall({ cors: true }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in to delete your account.");
+  }
+  const uid = request.auth.uid;
+  const db = getFirestore();
+  try {
+    // Recursively delete everything under users/{uid} (all subcollections).
+    await db.recursiveDelete(db.collection("users").doc(uid));
+    // Server-trusted docs the client cannot delete under security rules.
+    await Promise.all([
+      db.collection("_entitlements").doc(uid).delete().catch(() => {}),
+      db.collection("_aiUsage").doc(uid).delete().catch(() => {}),
+    ]);
+    // Finally remove the auth account.
+    await getAuth().deleteUser(uid).catch(() => {});
+    return { ok: true };
+  } catch (err) {
+    console.error("deleteAccount failed", err);
+    throw new HttpsError("internal", "Could not delete the account.");
+  }
 });
 
 /**

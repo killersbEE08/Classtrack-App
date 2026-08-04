@@ -143,11 +143,11 @@ class _HabitCard extends ConsumerWidget {
     final color = Color(habit.colorHex);
     final doneToday = habit.doneToday;
 
-    // Last 7 days (oldest -> today).
+    // Current week in natural order Monday -> Sunday.
     final now = DateTime.now();
-    final week = List.generate(
-        7, (i) => DateTime(now.year, now.month, now.day)
-            .subtract(Duration(days: 6 - i)));
+    final today = DateTime(now.year, now.month, now.day);
+    final monday = today.subtract(Duration(days: today.weekday - 1));
+    final week = List.generate(7, (i) => monday.add(Duration(days: i)));
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -186,18 +186,23 @@ class _HabitCard extends ConsumerWidget {
                         const Icon(Icons.local_fire_department_rounded,
                             size: 14, color: AppColors.coral),
                         const SizedBox(width: 4),
-                        Text('${habit.streak} day streak',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                                fontWeight: FontWeight.w600)),
-                        if (habit.totalDays > 0) ...[
-                          Text('  ·  ${habit.totalDays} days total',
-                              style: theme.textTheme.bodySmall),
-                        ],
+                        Flexible(
+                          child: Text(
+                            habit.totalDays > 0
+                                ? '${habit.streak} day streak  ·  ${habit.totalDays} days total'
+                                : '${habit.streak} day streak',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ),
                       ],
                     ),
                   ],
                 ),
               ),
+              _menuButton(context, ref),
               _toggle(context, ref, color, doneToday),
             ],
           ),
@@ -208,12 +213,76 @@ class _HabitCard extends ConsumerWidget {
               for (var i = 0; i < 7; i++)
                 _dayDot(context, ref, HabitsScreen._dayShort[week[i].weekday - 1],
                     week[i], habit.doneOn(week[i]), color,
-                    isToday: DateUtilsX.isSameDay(week[i], now)),
+                    isToday: DateUtilsX.isSameDay(week[i], now),
+                    isFuture: week[i].isAfter(now)),
             ],
           ),
         ],
       ),
     );
+  }
+
+  Widget _menuButton(BuildContext context, WidgetRef ref) {
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert_rounded),
+      tooltip: 'Options',
+      padding: EdgeInsets.zero,
+      splashRadius: 20,
+      onSelected: (value) {
+        if (value == 'edit') {
+          HabitsScreen._openEditor(context, habit: habit);
+        } else if (value == 'delete') {
+          _confirmDelete(context, ref);
+        }
+      },
+      itemBuilder: (_) => const [
+        PopupMenuItem(
+          value: 'edit',
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.edit_rounded),
+            title: Text('Edit'),
+          ),
+        ),
+        PopupMenuItem(
+          value: 'delete',
+          child: ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.delete_outline_rounded, color: AppColors.danger),
+            title: Text('Delete', style: TextStyle(color: AppColors.danger)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmDelete(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete habit?'),
+        content: Text('“${habit.title}” and its streak history will be removed.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await ref.read(habitControllerProvider).delete(habit.id);
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Habit deleted'),
+          behavior: SnackBarBehavior.floating,
+          duration: Duration(seconds: 2)));
+    }
   }
 
   Widget _toggle(
@@ -239,29 +308,36 @@ class _HabitCard extends ConsumerWidget {
 
   Widget _dayDot(BuildContext context, WidgetRef ref, String label,
       DateTime date, bool done, Color color,
-      {required bool isToday}) {
+      {required bool isToday, bool isFuture = false}) {
     final theme = Theme.of(context);
     return GestureDetector(
-      onTap: () => ref.read(habitControllerProvider).toggleDate(habit, date),
+      onTap: isFuture
+          ? null
+          : () => ref.read(habitControllerProvider).toggleDate(habit, date),
       behavior: HitTestBehavior.opaque,
-      child: Column(
-        children: [
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              color: done ? color : theme.dividerColor.withValues(alpha: 0.4),
-              shape: BoxShape.circle,
-              border: isToday ? Border.all(color: color, width: 2) : null,
+      child: Opacity(
+        opacity: isFuture ? 0.35 : 1,
+        child: Column(
+          children: [
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: done ? color : theme.dividerColor.withValues(alpha: 0.4),
+                shape: BoxShape.circle,
+                border: isToday ? Border.all(color: color, width: 2) : null,
+              ),
+              child: done
+                  ? const Icon(Icons.check_rounded,
+                      size: 16, color: Colors.white)
+                  : null,
             ),
-            child: done
-                ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
-                : null,
-          ),
-          const SizedBox(height: 4),
-          Text(label, style: theme.textTheme.bodySmall?.copyWith(fontSize: 10)),
-        ],
+            const SizedBox(height: 4),
+            Text(label,
+                style: theme.textTheme.bodySmall?.copyWith(fontSize: 10)),
+          ],
+        ),
       ),
     );
   }

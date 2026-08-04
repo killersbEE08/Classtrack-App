@@ -33,11 +33,11 @@ android {
 
     defaultConfig {
         // Store-facing Application ID — locked before publishing.
-        applicationId = "com.classtrack.app"
+        applicationId = "com.classtracks.app"
         // Firebase Auth/Firestore require a minSdk of 23+.
         minSdk = maxOf(flutter.minSdkVersion, 23)
-        // Google Play requires new apps/updates to target Android 15 (API 35).
-        targetSdk = 35
+        // Google Play requires new apps/updates to target Android 16 (API 36).
+        targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         multiDexEnabled = true

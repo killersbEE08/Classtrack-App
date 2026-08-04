@@ -1,13 +1,27 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- Firebase Analytics pulls in the advertising-ID permission by default.
+         ClassTrack has no ads and only uses Analytics for internal feature-usage,
+         so we explicitly REMOVE it. This keeps the Play "advertising ID"
+         data-safety answer a truthful "No" and avoids collecting the ad ID. -->
+    <uses-permission android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove"/>
+    <!-- Exact alarms so time-critical reminders (class start, daily 7:30
+         summary) fire on time instead of being batched by Doze. The app
+         degrades gracefully to inexact alarms if this isn't granted. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
 
     <application
         android:label="ClassTrack"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        tools:replace="android:allowBackup">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -35,6 +49,19 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Firebase Cloud Messaging: channel used to display pushes received
+             while the app is in the background/terminated. Must match
+             kPushChannelId in lib/services/push_messaging_service.dart, which
+             creates the channel at runtime. Without this, background pushes
+             land in a low-importance fallback channel and don't pop up. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="classtrack_push" />
+        <!-- Tint applied to the (monochrome) status-bar notification icon. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/ic_launcher_background" />
 
         <!-- flutter_local_notifications: reschedule after reboot -->
         <receiver

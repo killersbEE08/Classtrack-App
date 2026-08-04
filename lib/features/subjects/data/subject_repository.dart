@@ -44,38 +44,59 @@ class SubjectRepository {
 
   /// Adjust attendance counters safely (never below 0). Only present/absent
   /// count toward the percentage; cancelled is tracked separately.
+  ///
+  /// Offline-safe: a `runTransaction` here would need a live server connection
+  /// and silently fail to apply while offline (the reason quick Present/Absent
+  /// taps sometimes "didn't register" or landed late). Instead we read the
+  /// current counters cache-first (instant offline) and write them back with a
+  /// plain merge `set`, which the SDK applies to the local cache immediately
+  /// and syncs to the server when connectivity returns.
   Future<void> adjust(String id,
       {int attendedDelta = 0,
       int absentDelta = 0,
       int cancelledDelta = 0}) async {
     final ref = _col.doc(id);
-    await _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
-      final data = snap.data() ?? <String, dynamic>{};
-      final curAttended = (data['attended'] as num?)?.toInt() ?? 0;
-      // Migrate legacy docs that only stored 'held'.
-      final curAbsent = (data['absent'] as num?)?.toInt() ??
-          (((data['held'] as num?)?.toInt() ?? curAttended) - curAttended)
-              .clamp(0, 100000);
-      final curCancelled = (data['cancelled'] as num?)?.toInt() ?? 0;
+    final data = await _readCounters(ref);
+    final curAttended = (data['attended'] as num?)?.toInt() ?? 0;
+    // Migrate legacy docs that only stored 'held'.
+    final curAbsent = (data['absent'] as num?)?.toInt() ??
+        (((data['held'] as num?)?.toInt() ?? curAttended) - curAttended)
+            .clamp(0, 100000);
+    final curCancelled = (data['cancelled'] as num?)?.toInt() ?? 0;
 
-      var attended = curAttended + attendedDelta;
-      var absent = curAbsent + absentDelta;
-      var cancelled = curCancelled + cancelledDelta;
-      if (attended < 0) attended = 0;
-      if (absent < 0) absent = 0;
-      if (cancelled < 0) cancelled = 0;
+    var attended = curAttended + attendedDelta;
+    var absent = curAbsent + absentDelta;
+    var cancelled = curCancelled + cancelledDelta;
+    if (attended < 0) attended = 0;
+    if (absent < 0) absent = 0;
+    if (cancelled < 0) cancelled = 0;
 
-      tx.set(
-          ref,
-          {
-            'attended': attended,
-            'absent': absent,
-            'held': attended + absent,
-            'cancelled': cancelled,
-          },
-          SetOptions(merge: true));
-    });
+    await ref.set(
+        {
+          'attended': attended,
+          'absent': absent,
+          'held': attended + absent,
+          'cancelled': cancelled,
+        },
+        SetOptions(merge: true));
+  }
+
+  /// Reads a subject's counter map without forcing a server round-trip. The
+  /// subject doc is almost always already cached (it is live-streamed by
+  /// [watchSubjects]), so this resolves instantly even offline.
+  Future<Map<String, dynamic>> _readCounters(
+    DocumentReference<Map<String, dynamic>> ref,
+  ) async {
+    try {
+      final cached = await ref.get(const GetOptions(source: Source.cache));
+      return cached.data() ?? <String, dynamic>{};
+    } catch (_) {
+      try {
+        return (await ref.get()).data() ?? <String, dynamic>{};
+      } catch (_) {
+        return <String, dynamic>{};
+      }
+    }
   }
 
   /// Directly set the counters (from the manual edit dialog).

@@ -34,6 +34,11 @@ class Subject {
   /// the attendance percentage.
   final int cancelled;
 
+  /// Per-subject attendance target (0–100). `null` means "follow the user's
+  /// global target". Lets labs/theory carry different requirements (e.g. 80%
+  /// vs 75%). Resolve with [effectiveTarget].
+  final double? targetPercent;
+
   /// Optional course/term duration.
   final DateTime? startDate;
   final DateTime? endDate;
@@ -54,6 +59,7 @@ class Subject {
     this.attended = 0,
     this.absent = 0,
     this.cancelled = 0,
+    this.targetPercent,
     this.startDate,
     this.endDate,
     this.iconKey,
@@ -64,6 +70,13 @@ class Subject {
   int get held => attended + absent;
   double get percent => held == 0 ? 0 : (attended / held) * 100.0;
   int get missed => absent;
+
+  /// This subject's effective attendance target: its own [targetPercent] when
+  /// set, otherwise the supplied global [fallback].
+  double effectiveTarget(double fallback) => targetPercent ?? fallback;
+
+  /// True when this subject overrides the global target.
+  bool get hasCustomTarget => targetPercent != null;
 
   // --- Course-timeline helpers (available when both dates are set) ----------
 
@@ -110,11 +123,13 @@ class Subject {
     int? attended,
     int? absent,
     int? cancelled,
+    double? targetPercent,
     DateTime? startDate,
     DateTime? endDate,
     String? iconKey,
     bool clearStartDate = false,
     bool clearEndDate = false,
+    bool clearTarget = false,
   }) {
     return Subject(
       id: id,
@@ -127,6 +142,7 @@ class Subject {
       attended: attended ?? this.attended,
       absent: absent ?? this.absent,
       cancelled: cancelled ?? this.cancelled,
+      targetPercent: clearTarget ? null : (targetPercent ?? this.targetPercent),
       startDate: clearStartDate ? null : (startDate ?? this.startDate),
       endDate: clearEndDate ? null : (endDate ?? this.endDate),
       iconKey: iconKey ?? this.iconKey,
@@ -145,6 +161,7 @@ class Subject {
         'absent': absent,
         'held': held, // kept for backward compatibility
         'cancelled': cancelled,
+        'targetPercent': targetPercent,
         'startDate':
             startDate != null ? Timestamp.fromDate(startDate!) : null,
         'endDate': endDate != null ? Timestamp.fromDate(endDate!) : null,
@@ -175,6 +192,7 @@ class Subject {
       attended: attended,
       absent: absent,
       cancelled: (map['cancelled'] as num?)?.toInt() ?? 0,
+      targetPercent: (map['targetPercent'] as num?)?.toDouble(),
       startDate: (map['startDate'] as Timestamp?)?.toDate(),
       endDate: (map['endDate'] as Timestamp?)?.toDate(),
       iconKey: map['iconKey'] as String?,

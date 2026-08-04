@@ -9,6 +9,7 @@ import '../../../../core/providers/gemini_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../services/gemini_service.dart';
+import '../../../../services/analytics_service.dart';
 import '../../../attendance/domain/attendance_record.dart';
 import '../../../attendance/presentation/providers/attendance_providers.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
@@ -119,6 +120,15 @@ class ChatController extends StateNotifier<ChatState> {
     final now = DateTime.now();
     sb.writeln(
         'Today is ${DateUtilsX.prettyFullDate(now)} (${DateUtilsX.dateId(now)}).');
+    final profileName =
+        _ref.read(userProfileProvider).valueOrNull?.displayName?.trim();
+    if (profileName != null && profileName.isNotEmpty) {
+      final first = profileName.split(RegExp(r'\s+')).first;
+      sb.writeln(
+          "The student's name is $first. Greet or address them by their first "
+          "name occasionally when it feels natural (for example in a greeting) "
+          "— not in every message.");
+    }
     final subjects = _ref.read(subjectsStreamProvider).valueOrNull ?? const [];
     final overall = _ref.read(overallStatsProvider);
     final target = _ref.read(userProfileProvider).valueOrNull?.targetAttendancePercent ??
@@ -127,6 +137,11 @@ class ChatController extends StateNotifier<ChatState> {
       sb.writeln(
           'Overall attendance: ${overall.held == 0 ? "no data" : "${overall.percent.toStringAsFixed(0)}% (${overall.present}/${overall.held})"}.');
       sb.writeln('Attendance target: ${target.toStringAsFixed(0)}%.');
+      final week = _ref.read(weeklyAttendanceProvider);
+      if (week.held > 0) {
+        sb.writeln(
+            'Attendance this week: ${week.percent.toStringAsFixed(0)}% (${week.present}/${week.held} classes; ${week.cancelled} cancelled).');
+      }
       sb.writeln('Subjects:');
       for (final s in subjects.take(20)) {
         final held = s.attended + s.absent;
@@ -207,9 +222,19 @@ class ChatController extends StateNotifier<ChatState> {
             '- ${e.title} on ${DateUtilsX.prettyDate(e.date)} (${e.countdownLabel})${room != null && room.isNotEmpty ? ", room $room" : ""}.');
       }
     }
+    final pastExams = _ref.read(pastExamsProvider);
+    if (pastExams.isNotEmpty) {
+      sb.writeln('Past exams:');
+      for (final e in pastExams.take(10)) {
+        sb.writeln('- ${e.title} on ${DateUtilsX.prettyDate(e.date)}.');
+      }
+    }
     final study = _ref.read(studyStatsProvider);
+    final allStudy =
+        _ref.read(studySessionsStreamProvider).valueOrNull ?? const [];
+    final allStudyMin = allStudy.fold<int>(0, (a, s) => a + s.minutes);
     sb.writeln(
-        'Study focus: ${study.weekMinutes} min this week, ${study.streakDays}-day streak.');
+        'Study focus: ${study.todayMinutes} min today, ${study.weekMinutes} min this week, ${study.streakDays}-day streak, $allStudyMin min all-time across ${allStudy.length} sessions.');
     final habitStreak = _ref.read(bestHabitStreakProvider);
     if (habitStreak > 0) sb.writeln('Best habit streak: $habitStreak days.');
     final currency = _ref.read(currencySymbolProvider);
@@ -240,6 +265,48 @@ class ChatController extends StateNotifier<ChatState> {
         for (final e in monthExpenses.take(10)) {
           sb.writeln(
               '- ${e.title} ($currency${e.amount.toStringAsFixed(0)}, ${e.category.label}, ${DateUtilsX.prettyDate(e.date)}).');
+        }
+      }
+      // Historical months so the assistant can answer about LAST MONTH and
+      // earlier (not just the current month). Computed from the full expense
+      // history, most recent first.
+      final allExpenses =
+          _ref.read(expensesStreamProvider).valueOrNull ?? const [];
+      final now2 = DateTime.now();
+      String monthKey(DateTime d) =>
+          '${d.year}-${d.month.toString().padLeft(2, '0')}';
+      final byMonth = <String, double>{};
+      final catByMonth = <String, Map<ExpenseCategory, double>>{};
+      for (final e in allExpenses) {
+        final key = monthKey(e.date);
+        byMonth[key] = (byMonth[key] ?? 0) + e.amount;
+        (catByMonth[key] ??= <ExpenseCategory, double>{})[e.category] =
+            ((catByMonth[key]?[e.category]) ?? 0) + e.amount;
+      }
+      final currentKey = monthKey(now2);
+      final pastKeys = byMonth.keys.where((k) => k != currentKey).toList()
+        ..sort((a, b) => b.compareTo(a));
+      if (pastKeys.isNotEmpty) {
+        sb.writeln('Expense history (previous months, spend per month):');
+        for (final k in pastKeys.take(6)) {
+          final cats = (catByMonth[k] ?? const {}).entries.toList()
+            ..sort((a, b) => b.value.compareTo(a.value));
+          final top = cats.isNotEmpty
+              ? ', top: ${cats.first.key.label} $currency${cats.first.value.toStringAsFixed(0)}'
+              : '';
+          sb.writeln('- $k: $currency${byMonth[k]!.toStringAsFixed(0)}$top');
+        }
+        // Explicit last-month category breakdown (a very common question).
+        final lastMonth = DateTime(now2.year, now2.month - 1, 1);
+        final lastCats = catByMonth[monthKey(lastMonth)];
+        if (lastCats != null && lastCats.isNotEmpty) {
+          final entries = lastCats.entries.toList()
+            ..sort((a, b) => b.value.compareTo(a.value));
+          sb.writeln('Last month by category:');
+          for (final e in entries) {
+            sb.writeln(
+                '- ${e.key.label}: $currency${e.value.toStringAsFixed(0)}');
+          }
         }
       }
     }
@@ -326,6 +393,9 @@ class ChatController extends StateNotifier<ChatState> {
 
     _append(ChatMessage(role: ChatRole.user, text: trimmed, image: image));
 
+    // Feature-usage analytics (never blocks the chat).
+    _ref.read(analyticsProvider).aiMessage(hasImage: image != null);
+
     if (!_gemini.isConfigured) {
       _append(const ChatMessage(
         role: ChatRole.assistant,
@@ -381,6 +451,9 @@ class ChatController extends StateNotifier<ChatState> {
       });
 
       final schedule = GeminiService.extractScheduleFromReply(reply);
+      if (schedule != null) {
+        _ref.read(analyticsProvider).scheduleImport('chat');
+      }
       final actions = GeminiService.extractActionsFromReply(reply);
       if (actions.isNotEmpty) {
         // When the assistant also proposes a reviewable schedule, the user
@@ -441,7 +514,7 @@ class ChatController extends StateNotifier<ChatState> {
   /// silently. Failures are swallowed so a bad action never derails the chat.
   Future<void> _executeActions(List<Map<String, dynamic>> actions) async {
     for (final a in actions) {
-      final type = (a['type'] as String?)?.trim();
+      final type = a['type']?.toString().trim();
       try {
         switch (type) {
           case 'expense':
@@ -480,6 +553,9 @@ class ChatController extends StateNotifier<ChatState> {
           case 'habitCheck':
             await _checkHabit(a);
             break;
+          case 'study':
+            await _addStudy(a);
+            break;
           case 'update':
             await _updateEntity(a);
             break;
@@ -502,6 +578,18 @@ class ChatController extends StateNotifier<ChatState> {
     }
   }
 
+  /// Coerce a JSON value to a double, tolerating numbers the model sent as
+  /// strings (e.g. "20"). Returns null when it isn't a usable number — so an
+  /// action degrades gracefully instead of throwing a ClassCastException that
+  /// would silently abort the write while the UI still says "Done ✅".
+  double? _toDouble(dynamic v) {
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v.trim());
+    return null;
+  }
+
+  int? _toInt(dynamic v) => _toDouble(v)?.round();
+
   String? _findSubjectIdByName(String? name) {
     if (name == null || name.trim().isEmpty) return null;
     final q = name.toLowerCase().trim();
@@ -514,7 +602,7 @@ class ChatController extends StateNotifier<ChatState> {
   }
 
   Future<void> _addExpense(Map<String, dynamic> a) async {
-    final amount = (a['amount'] as num?)?.toDouble();
+    final amount = _toDouble(a['amount']);
     if (amount == null || amount <= 0) return;
     final category = ExpenseCategoryX.parse(a['category'] as String?);
     final title = (a['title'] as String?)?.trim();
@@ -620,7 +708,7 @@ class ChatController extends StateNotifier<ChatState> {
   }
 
   Future<void> _setBudget(Map<String, dynamic> a) async {
-    final amount = (a['amount'] as num?)?.toDouble();
+    final amount = _toDouble(a['amount']);
     if (amount == null || amount < 0) return;
     await _ref.read(expenseSettingsProvider).setBudget(amount);
   }
@@ -673,9 +761,10 @@ class ChatController extends StateNotifier<ChatState> {
     if (byTitle != null) return byTitle;
 
     // If we narrowed by amount/category, return the most recent candidate.
+    // Sort a COPY — never mutate the stream-backed list other widgets read.
     if ((amount != null || category != null) && pool.isNotEmpty) {
-      pool.sort((a, b) => b.date.compareTo(a.date));
-      return pool.first;
+      final sorted = [...pool]..sort((a, b) => b.date.compareTo(a.date));
+      return sorted.first;
     }
 
     // Fall back to a plain title search across everything.
@@ -706,13 +795,15 @@ class ChatController extends StateNotifier<ChatState> {
       name: name,
       colorHex: _pickColor(a['color'] as String?),
       iconKey: a['icon'] as String?,
+      startDate: _parseDate(a['startDate'] as String?),
+      endDate: _parseDate(a['endDate'] as String?),
     ));
   }
 
   Future<void> _addGrade(Map<String, dynamic> a) async {
     final title = (a['title'] as String?)?.trim();
-    final score = (a['score'] as num?)?.toDouble();
-    final maxScore = (a['maxScore'] as num?)?.toDouble();
+    final score = _toDouble(a['score']);
+    final maxScore = _toDouble(a['maxScore']);
     if (title == null || title.isEmpty || score == null || maxScore == null ||
         maxScore <= 0) {
       return;
@@ -722,7 +813,7 @@ class ChatController extends StateNotifier<ChatState> {
           title: title,
           score: score,
           maxScore: maxScore,
-          weight: (a['weight'] as num?)?.toDouble(),
+          weight: _toDouble(a['weight']),
           subjectId: _findSubjectIdByName(a['subject'] as String?),
           date: DateTime.now(),
         ));
@@ -762,9 +853,19 @@ class ChatController extends StateNotifier<ChatState> {
         ));
   }
 
+  /// Logs a focus/study session (minutes, optional subject + date).
+  Future<void> _addStudy(Map<String, dynamic> a) async {
+    final minutes = _toInt(a['minutes']);
+    if (minutes == null || minutes <= 0) return;
+    await _ref.read(studyControllerProvider).logSession(
+          minutes: minutes,
+          subjectId: _findSubjectIdByName(a['subject'] as String?),
+          startedAt: _parseDate(a['date'] as String?),
+        );
+  }
+
   /// Marks the matching habit done for today (idempotent — never un-checks).
-  Future<void> _checkHabit(Map<String, dynamic> a) async {
-    final q = (a['match'] ?? a['title'] ?? a['name']) as String?;
+  Future<void> _checkHabit(Map<String, dynamic> a) async {    final q = (a['match'] ?? a['title'] ?? a['name']) as String?;
     final habits = _ref.read(habitsStreamProvider).valueOrNull ?? const [];
     final h = _match(habits, q, (x) => x.title);
     if (h == null || h.doneToday) return;
@@ -814,12 +915,12 @@ class ChatController extends StateNotifier<ChatState> {
         final ex = _matchExpense(
             _ref.read(expensesStreamProvider).valueOrNull ?? const [],
             q,
-            a['amount'] as num?,
+            _toDouble(a['amount']),
             a['category'] as String?);
         if (ex == null) return;
         await _ref.read(expenseControllerProvider).update(ex.copyWith(
               title: _clean(a['newTitle'] as String?),
-              amount: (a['newAmount'] as num?)?.toDouble(),
+              amount: _toDouble(a['newAmount']),
               category: a['newCategory'] != null
                   ? ExpenseCategoryX.parse(a['newCategory'] as String?)
                   : null,
@@ -843,9 +944,9 @@ class ChatController extends StateNotifier<ChatState> {
         if (g == null) return;
         await _ref.read(gradeControllerProvider).update(g.copyWith(
               title: _clean(a['newTitle'] as String?),
-              score: (a['score'] as num?)?.toDouble(),
-              maxScore: (a['maxScore'] as num?)?.toDouble(),
-              weight: (a['weight'] as num?)?.toDouble(),
+              score: _toDouble(a['score']),
+              maxScore: _toDouble(a['maxScore']),
+              weight: _toDouble(a['weight']),
             ));
         break;
       case 'subject':
@@ -859,6 +960,8 @@ class ChatController extends StateNotifier<ChatState> {
           name: _clean(a['newName'] as String?),
           colorHex: a['color'] != null ? _pickColor(a['color'] as String?) : null,
           iconKey: a['icon'] as String?,
+          startDate: _parseDate(a['startDate'] as String?),
+          endDate: _parseDate(a['endDate'] as String?),
         ));
         break;
       case 'class':
@@ -869,9 +972,10 @@ class ChatController extends StateNotifier<ChatState> {
             _ref.read(sessionsForSubjectProvider(subjectId)).valueOrNull ??
                 const [];
         final day = Weekdays.parse((a['day'] as String?) ?? '');
+        if (day == null) return; // need a specific day to pick the right class
         ClassSession? target;
         for (final s in sessions) {
-          if (day == null || s.dayOfWeek == day) {
+          if (s.dayOfWeek == day) {
             target = s;
             break;
           }
@@ -931,7 +1035,7 @@ class ChatController extends StateNotifier<ChatState> {
         final ex = _matchExpense(
             _ref.read(expensesStreamProvider).valueOrNull ?? const [],
             q,
-            a['amount'] as num?,
+            _toDouble(a['amount']),
             a['category'] as String?);
         if (ex != null) {
           await _ref.read(expenseControllerProvider).delete(ex.id);
@@ -981,9 +1085,10 @@ class ChatController extends StateNotifier<ChatState> {
             _ref.read(sessionsForSubjectProvider(subjectId)).valueOrNull ??
                 const [];
         final day = Weekdays.parse((a['day'] as String?) ?? '');
+        if (day == null) return; // need a specific day to pick the right class
         ClassSession? target;
         for (final s in sessions) {
-          if (day == null || s.dayOfWeek == day) {
+          if (s.dayOfWeek == day) {
             target = s;
             break;
           }
@@ -1066,6 +1171,11 @@ class ChatController extends StateNotifier<ChatState> {
 
 final chatControllerProvider =
     StateNotifierProvider<ChatController, ChatState>((ref) {
+  // Recreate a fresh (empty) controller whenever the signed-in user changes,
+  // so one account can NEVER see another account's in-memory conversation.
+  // The saved history in Firestore is already per-uid; this resets the live,
+  // in-memory chat + Gemini history on sign-out / account switch.
+  ref.watch(currentUidProvider);
   return ChatController(ref.watch(geminiServiceProvider), ref);
 });
 

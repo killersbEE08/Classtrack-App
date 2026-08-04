@@ -33,12 +33,27 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
     final ok = await ref
         .read(authControllerProvider.notifier)
         .signUp(_email.text, _password.text, _name.text);
-    if (!ok && mounted) {
-      final err = ref.read(authControllerProvider).error;
-      ScaffoldMessenger.of(context).showSnackBar(
+    if (!ok && mounted) _showError();
+  }
+
+  /// Sign up (or sign in) with Google. For OAuth there's no separate "create
+  /// account" step — signing in provisions the Firebase user and the profile
+  /// document on first use (see AuthRepository.signInWithGoogle).
+  Future<void> _google() async {
+    final ok =
+        await ref.read(authControllerProvider.notifier).signInWithGoogle();
+    if (!ok && mounted) _showError();
+  }
+
+  void _showError() {
+    final err = ref.read(authControllerProvider).error;
+    // Clear any queued/visible snackbars first so a rapid sequence of failed
+    // attempts doesn't stack and flash the same message several times.
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
         SnackBar(content: Text(friendlyAuthError(err ?? 'error'))),
       );
-    }
   }
 
   @override
@@ -109,6 +124,19 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                   loading: loading,
                   onPressed: _submit,
                 ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Expanded(child: Divider()),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Text('or', style: theme.textTheme.bodySmall),
+                    ),
+                    const Expanded(child: Divider()),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                GoogleButton(onPressed: _google, loading: loading),
                 const SizedBox(height: 16),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,

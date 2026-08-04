@@ -7,10 +7,11 @@ import '../../../../core/theme/subject_icons.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../core/utils/url_launcher_util.dart';
 import '../../../../services/reminder_scheduler.dart';
+import '../../../../services/analytics_service.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../../attendance/domain/attendance_record.dart';
 import '../../../attendance/presentation/providers/attendance_providers.dart';
-import '../../../attendance/presentation/screens/progress_screen.dart';
+import '../../../attendance/presentation/screens/attendance_screen.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../calendar/presentation/screens/calendar_screen.dart';
 import '../../../chat/presentation/screens/chat_screen.dart';
@@ -216,7 +217,7 @@ class DashboardScreen extends ConsumerWidget {
                 value: held == 0 ? '—' : '${pct.toStringAsFixed(0)}%',
                 unit: held == 0 ? 'No data' : 'Overall',
                 bg: AppColors.peachSoft,
-                onTap: () => _push(context, const ProgressScreen()),
+                onTap: () => _push(context, const AttendanceScreen()),
               ),
             ),
           ],
@@ -579,9 +580,21 @@ class _ExitableClassCardState extends ConsumerState<_ExitableClassCard>
   void _mark(AttendanceStatus status) {
     final ctrl = ref.read(attendanceControllerProvider);
     final subject = widget.scheduled.subject;
-    ctrl.setForOccurrence(subject.id, DateTime.now(),
-        widget.scheduled.session.startTime, status);
     final messenger = ScaffoldMessenger.of(context);
+    // The write is applied to the local cache synchronously, so dismissing the
+    // card immediately is honest — the mark is durably saved on-device even
+    // offline and will sync automatically. We still attach an error handler so
+    // a genuine server rejection (e.g. permissions) surfaces instead of being
+    // silently swallowed.
+    ctrl
+        .setForOccurrence(subject.id, DateTime.now(),
+            widget.scheduled.session.startTime, status)
+        .catchError((_) {
+      if (!mounted) return;
+      messenger.showSnackBar(const SnackBar(
+        content: Text("Couldn't sync that mark — we'll retry automatically."),
+      ));
+    });
     messenger.removeCurrentSnackBar();
     messenger.showSnackBar(SnackBar(
       duration: const Duration(milliseconds: 1500),
@@ -769,11 +782,11 @@ class _EmptyTile extends StatelessWidget {
 
 /// Horizontal quick-access row to the study tools (Grades, Focus, Exams,
 /// Notes, Calendar).
-class _StudyToolsRow extends StatelessWidget {
+class _StudyToolsRow extends ConsumerWidget {
   const _StudyToolsRow();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     void go(Widget screen) => Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => screen));
@@ -813,7 +826,10 @@ class _StudyToolsRow extends StatelessWidget {
             itemBuilder: (_, i) {
               final t = tools[i];
               return GestureDetector(
-                onTap: t.onTap,
+                onTap: () {
+                  ref.read(analyticsProvider).openFeature(t.label);
+                  t.onTap();
+                },
                 child: Container(
                   width: 78,
                   padding: const EdgeInsets.symmetric(vertical: 12),

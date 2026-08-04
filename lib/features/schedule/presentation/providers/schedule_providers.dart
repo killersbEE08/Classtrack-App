@@ -73,20 +73,6 @@ final classesForDayProvider =
   return list;
 });
 
-/// Distinct days in a month that have at least one class (for calendar markers).
-final classesForWeekdayProvider =
-    Provider.family<List<ScheduledClass>, int>((ref, weekday0) {
-  final all = ref.watch(allSessionsProvider);
-  final list = all
-      .where((c) => c.session.recurring && c.session.dayOfWeek == weekday0)
-      .toList();
-  list.sort((a, b) => DateUtilsX.minutesOfDay(a.session.startTime)
-      .compareTo(DateUtilsX.minutesOfDay(b.session.startTime)));
-  return list;
-});
-
-
-
 /// Projected number of classes across a subject's whole term, derived from its
 /// recurring timetable sessions and its start/end dates. Returns 0 when the
 /// subject has no term set. Powers the "~N classes this term" indicator.

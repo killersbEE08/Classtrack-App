@@ -5,13 +5,16 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../shared/widgets/buttons.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
+import '../../../subjects/presentation/screens/edit_subject_screen.dart';
 import '../../domain/class_session.dart';
 import '../providers/schedule_providers.dart';
 
+/// Sentinel value for the "Create new subject" entry in the subject dropdown.
+const _kNewSubjectValue = '__new_subject__';
+
 /// Add or edit a [ClassSession]. Optionally pre-select [subjectId] and pass an
 /// existing [session] to edit.
-class EditSessionScreen extends ConsumerStatefulWidget {
-  final String? subjectId;
+class EditSessionScreen extends ConsumerStatefulWidget {  final String? subjectId;
   final ClassSession? session;
   const EditSessionScreen({super.key, this.subjectId, this.session});
 
@@ -83,6 +86,30 @@ class _EditSessionScreenState extends ConsumerState<EditSessionScreen> {
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
     if (picked != null) setState(() => _specificDate = picked);
+  }
+
+  /// Opens the subject editor so a class can be created even when no subjects
+  /// exist yet (or the user wants a brand-new one). The newly created subject
+  /// is auto-selected when we return, so every subject is reachable as a class.
+  Future<void> _createSubjectInline() async {
+    final before = (ref.read(subjectsStreamProvider).valueOrNull ?? const [])
+        .map((s) => s.id)
+        .toSet();
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const EditSubjectScreen()),
+    );
+    if (!mounted) return;
+    // The subjects stream (Firestore with local latency compensation) usually
+    // reflects the new subject almost immediately; poll briefly to be safe.
+    for (var i = 0; i < 20; i++) {
+      final subjects = ref.read(subjectsStreamProvider).valueOrNull ?? const [];
+      final added = subjects.where((s) => !before.contains(s.id)).toList();
+      if (added.isNotEmpty) {
+        setState(() => _subjectId = added.first.id);
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
   }
 
   Future<void> _save() async {
@@ -181,14 +208,33 @@ class _EditSessionScreenState extends ConsumerState<EditSessionScreen> {
           DropdownButtonFormField<String>(
             value: _subjectId,
             isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Subject'),
-            items: subjects
-                .map((s) => DropdownMenuItem(
-                      value: s.id,
-                      child: Text(s.name, overflow: TextOverflow.ellipsis),
-                    ))
-                .toList(),
-            onChanged: (v) => setState(() => _subjectId = v),
+            decoration: const InputDecoration(
+              labelText: 'Subject',
+              hintText: 'Select or create a subject',
+            ),
+            items: [
+              ...subjects.map((s) => DropdownMenuItem(
+                    value: s.id,
+                    child: Text(s.name, overflow: TextOverflow.ellipsis),
+                  )),
+              const DropdownMenuItem(
+                value: _kNewSubjectValue,
+                child: Row(
+                  children: [
+                    Icon(Icons.add_rounded, size: 18),
+                    SizedBox(width: 8),
+                    Text('Create new subject'),
+                  ],
+                ),
+              ),
+            ],
+            onChanged: (v) {
+              if (v == _kNewSubjectValue) {
+                _createSubjectInline();
+              } else {
+                setState(() => _subjectId = v);
+              }
+            },
           ),
           const SizedBox(height: 20),
           SwitchListTile(

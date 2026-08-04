@@ -4,15 +4,17 @@ import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../services/analytics_service.dart';
+import '../../../../services/notification_service.dart';
 import '../../../../services/reminder_scheduler.dart';
 import '../../../../services/home_widget_service.dart';
+import '../../../insights/presentation/screens/daily_agenda_screen.dart';
 import '../../../subscription/presentation/providers/subscription_providers.dart';
 import '../../../schedule/presentation/screens/schedule_screen.dart';
 import '../../../schedule/presentation/screens/edit_session_screen.dart';
 import '../../../subjects/presentation/screens/edit_subject_screen.dart';
-import '../../../tasks/domain/task_item.dart';
 import '../../../tasks/presentation/screens/tasks_screen.dart';
-import '../../../attendance/presentation/screens/progress_screen.dart';
+import '../../../attendance/presentation/screens/attendance_screen.dart';
 import '../../../exams/presentation/screens/exams_screen.dart';
 import '../../../expenses/presentation/screens/expenses_screen.dart';
 import '../../../grades/presentation/screens/grades_screen.dart';
@@ -23,7 +25,6 @@ import 'dashboard_screen.dart';
 /// Opens the "quick add" menu triggered by the center FAB. Available app-wide.
 enum _QuickAddAction {
   task,
-  course,
   classSession,
   subject,
   exam,
@@ -93,15 +94,8 @@ Future<void> showQuickAddSheet(BuildContext context) async {
                 icon: Icons.check_circle_outline_rounded,
                 color: AppColors.primary,
                 title: 'New task',
-                subtitle: 'Assignment, deadline or to-do',
+                subtitle: 'Assignment, deadline, course or video',
                 onTap: () => Navigator.pop(ctx, _QuickAddAction.task),
-              ),
-              option(
-                icon: Icons.play_circle_fill_rounded,
-                color: AppColors.coral,
-                title: 'Course / video',
-                subtitle: 'Plan a course or video and paste its link',
-                onTap: () => Navigator.pop(ctx, _QuickAddAction.course),
               ),
               option(
                 icon: Icons.calendar_today_rounded,
@@ -165,6 +159,11 @@ Future<void> showQuickAddSheet(BuildContext context) async {
   // the two sheet animations never overlap (which felt laggy / janky before).
   if (action == null || !context.mounted) return;
 
+  // Feature-usage analytics: which quick-add option was used.
+  ProviderScope.containerOf(context, listen: false)
+      .read(analyticsProvider)
+      .quickAdd(action.name);
+
   Future<void> openSheet(Widget sheet) => showModalBottomSheet(
         context: context,
         isScrollControlled: true,
@@ -177,9 +176,6 @@ Future<void> showQuickAddSheet(BuildContext context) async {
   switch (action) {
     case _QuickAddAction.task:
       await openSheet(const TaskEditorSheet());
-      break;
-    case _QuickAddAction.course:
-      await openSheet(const TaskEditorSheet(initialType: TaskType.course));
       break;
     case _QuickAddAction.exam:
       await openSheet(const ExamEditorSheet());
@@ -220,19 +216,56 @@ class _HomeShellState extends ConsumerState<HomeShell>
     DashboardScreen(),
     ScheduleScreen(),
     TasksScreen(),
-    ProgressScreen(),
+    AttendanceScreen(),
   ];
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Deep-link when the user taps the daily-agenda notification (foreground
+    // tap or cold-start launch handled in NotificationService).
+    NotificationService.selectedPayload.addListener(_onNotificationPayload);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _onNotificationPayload());
   }
 
   @override
   void dispose() {
+    NotificationService.selectedPayload.removeListener(_onNotificationPayload);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  /// Deep-links in response to a tapped notification, then clears the pending
+  /// payload so it only fires once.
+  ///  • daily-agenda summary  → the Daily agenda screen.
+  ///  • class "starts soon"   → the Schedule tab, where attendance is marked
+  ///    (the reminder body invites the student to "mark attendance").
+  ///  • attendance risk alert → the Schedule tab as well.
+  void _onNotificationPayload() {
+    final payload = NotificationService.selectedPayload.value;
+    if (payload == null) return;
+
+    if (payload == NotificationService.dailyAgendaPayload) {
+      NotificationService.selectedPayload.value = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const DailyAgendaScreen()),
+        );
+      });
+      return;
+    }
+
+    if (payload == NotificationService.classReminderPayload ||
+        payload == NotificationService.attendanceRiskPayload) {
+      NotificationService.selectedPayload.value = null;
+      // Schedule tab (index 1) lists today's classes with their mark-attendance
+      // controls.
+      if (mounted) setState(() => _index = 1);
+      return;
+    }
   }
 
   @override
@@ -278,7 +311,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
             _CenterFab(onTap: () => showQuickAddSheet(context)),
         bottomNavigationBar: _FloatingNavBar(
           index: _index,
-          onSelect: (i) => setState(() => _index = i),
+          onSelect: (i) {
+            if (i != _index) {
+              const names = ['home', 'schedule', 'tasks', 'attendance'];
+              ref.read(analyticsProvider).tab(names[i]);
+            }
+            setState(() => _index = i);
+          },
         ),
       ),
     );
@@ -365,8 +404,13 @@ class _FloatingNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // The Scaffold uses extendBody: true, so this floating bar is drawn all the
+    // way to the physical screen bottom. Add the device's bottom safe-area
+    // inset (large on phones with a 3-button nav bar, ~0 on gesture nav) so the
+    // pill and its labels are never clipped by the system navigation bar.
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+      padding: EdgeInsets.fromLTRB(18, 0, 18, 18 + bottomInset),
       child: Container(
         height: 68,
         decoration: BoxDecoration(
@@ -405,9 +449,9 @@ class _FloatingNavBar extends StatelessWidget {
               onTap: () => onSelect(2),
             ),
             _NavItem(
-              icon: Icons.insert_chart_outlined_rounded,
-              activeIcon: Icons.insert_chart_rounded,
-              label: 'Progress',
+              icon: Icons.pie_chart_outline_rounded,
+              activeIcon: Icons.pie_chart_rounded,
+              label: 'Attendance',
               selected: index == 3,
               onTap: () => onSelect(3),
             ),

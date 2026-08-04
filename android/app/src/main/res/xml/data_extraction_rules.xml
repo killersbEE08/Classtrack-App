@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ (API 31+) backup/transfer policy.
+
+  ClassTrack persists TWO kinds of local, per-user state on the device:
+    1. The signed-in user's scheduled reminder store, written by
+       flutter_local_notifications (so the boot receiver can re-fire them).
+    2. The user's personal settings in SharedPreferences.
+
+  Allowing Android Auto Backup / device-to-device transfer to copy that data to
+  Google Drive and restore it onto ANOTHER phone is exactly what caused one
+  account's exam reminder ("Exam tomorrow: DP-600") to fire on a different
+  person's device, and personalisation (accent colour, on-device API key) to
+  follow the wrong account. We therefore disable BOTH channels for every domain.
+
+  Nothing of value is lost: the user's real data lives in Firestore and is
+  restored automatically when they sign in again.
+
+  Combined with android:allowBackup="false" in the manifest (which covers all
+  API levels for cloud backup), this rules file additionally suppresses the
+  Android 12+ device-to-device transfer path.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

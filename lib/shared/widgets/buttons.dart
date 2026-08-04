@@ -79,7 +79,12 @@ class GoogleButton extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 12),
-                const Text('Continue with Google'),
+                const Flexible(
+                  child: Text(
+                    'Continue with Google',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ],
             ),
     );

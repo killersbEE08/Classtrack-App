@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/models/checklist_item.dart';
+
 /// A scheduled exam / test. Stored at users/{uid}/exams/{id}.
 class Exam {
   final String id;
@@ -8,6 +10,7 @@ class Exam {
   final DateTime date; // date + time of the exam
   final String? room;
   final String? note; // syllabus / topics
+  final List<ChecklistItem> topics; // revision checklist for prep readiness
   final DateTime? createdAt;
 
   const Exam({
@@ -17,6 +20,7 @@ class Exam {
     required this.date,
     this.room,
     this.note,
+    this.topics = const [],
     this.createdAt,
   });
 
@@ -29,6 +33,13 @@ class Exam {
   }
 
   bool get isPast => date.isBefore(DateTime.now());
+
+  bool get hasTopics => topics.isNotEmpty;
+  int get topicsDone => topics.where((t) => t.done).length;
+
+  /// Preparation readiness (0..1) from the revision checklist; 0 when empty.
+  double get readiness =>
+      topics.isEmpty ? 0 : topicsDone / topics.length;
 
   String get countdownLabel {
     final d = daysUntil;
@@ -44,6 +55,7 @@ class Exam {
     DateTime? date,
     String? room,
     String? note,
+    List<ChecklistItem>? topics,
     bool clearSubject = false,
     bool clearRoom = false,
     bool clearNote = false,
@@ -55,6 +67,7 @@ class Exam {
       date: date ?? this.date,
       room: clearRoom ? null : (room ?? this.room),
       note: clearNote ? null : (note ?? this.note),
+      topics: topics ?? this.topics,
       createdAt: createdAt,
     );
   }
@@ -65,6 +78,7 @@ class Exam {
         'date': Timestamp.fromDate(date),
         'room': room,
         'note': note,
+        'topics': ChecklistItem.listToMap(topics),
         'createdAt': createdAt != null
             ? Timestamp.fromDate(createdAt!)
             : FieldValue.serverTimestamp(),
@@ -78,6 +92,7 @@ class Exam {
       date: (map['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
       room: map['room'] as String?,
       note: map['note'] as String?,
+      topics: ChecklistItem.listFrom(map['topics']),
       createdAt: (map['createdAt'] as Timestamp?)?.toDate(),
     );
   }

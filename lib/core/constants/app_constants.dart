@@ -3,7 +3,21 @@ class AppConstants {
   AppConstants._();
 
   static const String appName = 'ClassTrack';
-  static const String bundleId = 'com.classtrack.app';
+  static const String bundleId = 'com.classtracks.app';
+
+  // Google Sign-In: the OAuth 2.0 *Web* client ID (client_type 3 in
+  // google-services.json). Passing this explicitly to GoogleSignIn makes the
+  // native SDK request an ID token directly, instead of relying on the
+  // auto-generated `default_web_client_id` string resource — which R8's
+  // resource shrinker strips from release builds, causing idToken == null and
+  // sign-in to fail only on Play Store / release builds.
+  static const String googleServerClientId =
+      '401205940629-8qbn7p6an2icehcp8lbortsom24ii7oa.apps.googleusercontent.com';
+
+  /// OAuth scope requested when importing a timetable from Google Calendar.
+  /// Read-only: ClassTrack only ever reads the user's events, never writes.
+  static const String googleCalendarScope =
+      'https://www.googleapis.com/auth/calendar.readonly';
 
   // Defaults
   static const double defaultTargetAttendance = 75.0;
@@ -63,12 +77,12 @@ class AppConstants {
   static const String contactEmail = 'piyush@classtracks.app';
 
   // Store links
-  static const String androidPackage = 'com.classtrack.app';
+  static const String androidPackage = 'com.classtracks.app';
   static const String playStoreUrl =
-      'https://play.google.com/store/apps/details?id=com.classtrack.app';
+      'https://play.google.com/store/apps/details?id=com.classtracks.app';
   // Deep link that opens the Play Store app directly on the listing.
   static const String playStoreMarketUrl =
-      'market://details?id=com.classtrack.app';
+      'market://details?id=com.classtracks.app';
   // Where the store subscription-management screen lives.
   static const String manageSubscriptionsUrl =
       'https://play.google.com/store/account/subscriptions';

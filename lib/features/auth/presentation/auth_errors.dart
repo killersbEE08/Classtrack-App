@@ -23,6 +23,9 @@ String friendlyAuthError(Object error) {
         return 'Please sign in again to complete this action.';
       case 'account-exists-with-different-credential':
         return 'You already signed up with a different method for this email.';
+      case 'google-no-token':
+        return 'Couldn\'t complete Google sign-in on this build. Please try '
+            'again in a few minutes, or use email sign-in.';
       case 'cancelled':
         return 'Sign-in cancelled.';
       default:

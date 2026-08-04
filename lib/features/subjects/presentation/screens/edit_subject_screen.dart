@@ -33,7 +33,9 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
   late List<_LinkFields> _links;  final List<_TimeBlock> _blocks = [];
   DateTime? _start;
   DateTime? _end;
+  double? _target; // null = follow global default
   bool _saving = false;
+  bool _loadingSessions = false;
 
   bool get _isEdit => widget.subject != null;
 
@@ -49,13 +51,71 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
     _iconKey = s?.iconKey ?? SubjectIcons.defaultKey;
     _start = s?.startDate;
     _end = s?.endDate;
+    _target = s?.targetPercent;
     _links = (s?.resourceLinks ?? [])
         .map((l) => _LinkFields(title: l.title, url: l.url))
         .toList();
-    _blocks.add(_TimeBlock(
-      start: const TimeOfDay(hour: 9, minute: 0),
-      end: const TimeOfDay(hour: 10, minute: 0),
-    ));
+    if (_isEdit) {
+      // Load the subject's existing timetable so the form shows (and can
+      // remove) the real schedule instead of an empty default block.
+      _loadingSessions = true;
+      _loadExistingSchedule();
+    } else {
+      // A subject represents a class, so start a new subject with a class on
+      // today's weekday pre-selected. This means it shows up on the Home
+      // screen and schedule straight away — the user can still change the day
+      // or add more.
+      _blocks.add(_TimeBlock(
+        start: const TimeOfDay(hour: 9, minute: 0),
+        end: const TimeOfDay(hour: 10, minute: 0),
+      )..days.add(DateTime.now().weekday - 1));
+    }
+  }
+
+  /// Fetch the subject's recurring sessions and group them into day/time
+  /// blocks (a class meeting on several days becomes one block with multiple
+  /// days selected). One-off sessions are left untouched by this screen.
+  Future<void> _loadExistingSchedule() async {
+    final repo = ref.read(sessionRepositoryProvider);
+    final subjectId = widget.subject?.id;
+    var sessions = const <ClassSession>[];
+    if (repo != null && subjectId != null) {
+      try {
+        sessions = await repo.getForSubject(subjectId);
+      } catch (_) {
+        // Fall through to a default block if the schedule can't be loaded.
+      }
+    }
+    if (!mounted) return;
+    final recurring =
+        sessions.where((s) => s.recurring && s.dayOfWeek != null).toList();
+    final byKey = <String, _TimeBlock>{};
+    for (final s in recurring) {
+      final key = '${s.startTime}|${s.endTime}|${s.room ?? ''}';
+      final block = byKey.putIfAbsent(key, () {
+        final start = DateUtilsX.parseTime24(s.startTime) ??
+            const TimeOfDay(hour: 9, minute: 0);
+        final end = DateUtilsX.parseTime24(s.endTime) ??
+            const TimeOfDay(hour: 10, minute: 0);
+        return _TimeBlock(start: start, end: end, room: s.room ?? '');
+      });
+      block.days.add(s.dayOfWeek!);
+    }
+    setState(() {
+      for (final b in _blocks) {
+        b.dispose();
+      }
+      _blocks
+        ..clear()
+        ..addAll(byKey.values);
+      if (_blocks.isEmpty) {
+        _blocks.add(_TimeBlock(
+          start: const TimeOfDay(hour: 9, minute: 0),
+          end: const TimeOfDay(hour: 10, minute: 0),
+        ));
+      }
+      _loadingSessions = false;
+    });
   }
 
   @override
@@ -175,6 +235,7 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
       attended: widget.subject?.attended ?? 0,
       absent: widget.subject?.absent ?? 0,
       cancelled: widget.subject?.cancelled ?? 0,
+      targetPercent: _target,
       startDate: _start,
       endDate: _end,
       iconKey: _iconKey,
@@ -189,15 +250,16 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
       } else {
         subjectId = await repo.create(subject);
       }
-      // Create a recurring class for each selected day in each time block.
+      // Reconcile the recurring timetable with the day/time blocks.
       final sessionRepo = ref.read(sessionRepositoryProvider);
       if (sessionRepo != null) {
-        // Load existing sessions so we never write an identical duplicate
-        // (e.g. when re-saving an edited subject whose schedule already exists).
         final existing = _isEdit
             ? await sessionRepo.getForSubject(subjectId)
             : const <ClassSession>[];
-        final seen = existing.map((s) => s.signature).toSet();
+
+        // Desired recurring sessions from the blocks (deduped by signature).
+        final desired = <ClassSession>[];
+        final desiredSigs = <String>{};
         for (final b in _blocks) {
           for (final day in b.days) {
             final session = ClassSession(
@@ -209,9 +271,47 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
               endTime: DateUtilsX.formatTime24(b.end),
               room: b.room.text.trim().isEmpty ? null : b.room.text.trim(),
             );
-            if (!seen.add(session.signature)) continue; // duplicate → skip
-            await sessionRepo.add(subjectId, session);
+            if (desiredSigs.add(session.signature)) desired.add(session);
           }
+        }
+
+        // A subject always represents at least one class. If a brand-new
+        // subject was saved without any weekday selected, create a weekly
+        // class on today's weekday so it appears on Home and the schedule.
+        if (!_isEdit && desired.isEmpty) {
+          final b = _blocks.isNotEmpty ? _blocks.first : null;
+          final session = ClassSession(
+            id: '',
+            subjectId: subjectId,
+            recurring: true,
+            dayOfWeek: DateTime.now().weekday - 1,
+            startTime:
+                b != null ? DateUtilsX.formatTime24(b.start) : '09:00',
+            endTime: b != null ? DateUtilsX.formatTime24(b.end) : '10:00',
+            room: (b != null && b.room.text.trim().isNotEmpty)
+                ? b.room.text.trim()
+                : null,
+          );
+          desiredSigs.add(session.signature);
+          desired.add(session);
+        }
+
+        final existingSigs = existing.map((s) => s.signature).toSet();
+
+        // Delete recurring slots the user removed. Never touch one-off
+        // (specificDate) sessions — those are managed from the schedule editor.
+        for (final s in existing) {
+          if (s.recurring &&
+              s.dayOfWeek != null &&
+              !desiredSigs.contains(s.signature)) {
+            await sessionRepo.delete(subjectId, s.id);
+          }
+        }
+
+        // Add newly-selected slots, skipping any that already exist.
+        for (final session in desired) {
+          if (existingSigs.contains(session.signature)) continue;
+          await sessionRepo.add(subjectId, session);
         }
       }
       if (mounted) context.pop();
@@ -384,15 +484,22 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
             Text('Pick the days and set the time.',
                 style: theme.textTheme.bodySmall),
             const SizedBox(height: 12),
-            ..._blocks.asMap().entries.map((e) => _blockCard(e.key, e.value)),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _addBlock,
-                icon: const Icon(Icons.add_rounded, size: 18),
-                label: const Text('Add another time'),
+            if (_loadingSessions)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else ...[
+              ..._blocks.asMap().entries.map((e) => _blockCard(e.key, e.value)),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _addBlock,
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('Add another time'),
+                ),
               ),
-            ),
+            ],
             const SizedBox(height: 12),
 
             // Advanced, collapsed.
@@ -450,6 +557,8 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
                         child: const Text('Clear dates'),
                       ),
                     ),
+                  const SizedBox(height: 8),
+                  _targetSection(theme),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -623,6 +732,63 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
         ),
         child: Text(date == null ? 'Not set' : DateUtilsX.prettyDate(date)),
       ),
+    );
+  }
+
+  Widget _targetSection(ThemeData theme) {
+    final custom = _target != null;
+    const globalDefault = AppConstants.defaultTargetAttendance;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Attendance target',
+                      style: theme.textTheme.titleSmall),
+                  Text(
+                    custom
+                        ? 'Custom for this subject'
+                        : 'Following your global target',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            Switch(
+              value: custom,
+              onChanged: (on) =>
+                  setState(() => _target = on ? (_target ?? globalDefault) : null),
+            ),
+          ],
+        ),
+        if (custom)
+          Row(
+            children: [
+              Expanded(
+                child: Slider(
+                  value: _target!.clamp(50, 100),
+                  min: 50,
+                  max: 100,
+                  divisions: 50,
+                  label: '${_target!.round()}%',
+                  activeColor: AppColors.primary,
+                  onChanged: (v) => setState(() => _target = v),
+                ),
+              ),
+              SizedBox(
+                width: 46,
+                child: Text('${_target!.round()}%',
+                    textAlign: TextAlign.end,
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
+      ],
     );
   }
 

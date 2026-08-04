@@ -10,6 +10,7 @@ import '../../../../core/utils/date_utils.dart';
 import '../../../../shared/widgets/states.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../../settings/presentation/screens/settings_screen.dart';
+import '../../../import/presentation/screens/import_entry.dart';
 import '../../../attendance/domain/attendance_record.dart';
 import '../../../attendance/presentation/providers/attendance_providers.dart';
 import '../../../exams/domain/exam.dart';
@@ -137,6 +138,11 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                   ],
                   Text('Schedule', style: theme.textTheme.displaySmall),
                   const Spacer(),
+                  RoundIconButton(
+                    icon: Icons.file_download_outlined,
+                    onTap: () => showImportOptions(context, ref),
+                  ),
+                  const SizedBox(width: 10),
                   RoundIconButton(
                     icon: Icons.add_rounded,
                     background: AppColors.primary,
@@ -312,12 +318,19 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
   // ---------------- WEEK ----------------
   Widget _weekView() {
     final theme = Theme.of(context);
-    final todayIdx = DateTime.now().weekday - 1;
+    final now = DateTime.now();
+    final todayIdx = now.weekday - 1; // 0 = Monday
+    // Anchor each row to the real calendar date in the *current* week so the
+    // list honors each subject's course start/end dates (and one-off classes /
+    // cancellations), staying consistent with the Day and Month views.
+    final monday = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: todayIdx));
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 120),
       itemCount: 7,
       itemBuilder: (context, day) {
-        final classes = ref.watch(classesForWeekdayProvider(day));
+        final date = monday.add(Duration(days: day));
+        final classes = ref.watch(classesForDayProvider(date));
         final isToday = day == todayIdx;
         return Container(
           margin: const EdgeInsets.only(bottom: 14),

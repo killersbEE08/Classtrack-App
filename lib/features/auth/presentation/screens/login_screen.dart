@@ -46,29 +46,37 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   void _showError() {
     final err = ref.read(authControllerProvider).error;
     if (err == null) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(friendlyAuthError(err))),
-    );
+    // Clear any queued/visible snackbars first so a rapid sequence of failed
+    // attempts doesn't stack and flash the same message several times.
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(content: Text(friendlyAuthError(err))),
+      );
   }
 
   Future<void> _forgotPassword() async {
     if (_email.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter your email first.')),
-      );
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Enter your email first.')),
+        );
       return;
     }
     final ok = await ref
         .read(authControllerProvider.notifier)
         .resetPassword(_email.text);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(ok
-              ? 'Password reset email sent.'
-              : friendlyAuthError(ref.read(authControllerProvider).error!)),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(ok
+                ? 'Password reset email sent.'
+                : friendlyAuthError(ref.read(authControllerProvider).error!)),
+          ),
+        );
     }
   }
 

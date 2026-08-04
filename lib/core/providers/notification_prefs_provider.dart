@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../constants/app_constants.dart';
 import 'app_settings_provider.dart';
@@ -81,10 +80,10 @@ class NotificationPrefs {
 }
 
 class NotificationPrefsController extends StateNotifier<NotificationPrefs> {
-  final SharedPreferences _prefs;
+  final ScopedPrefs _prefs;
   NotificationPrefsController(this._prefs) : super(_load(_prefs));
 
-  static NotificationPrefs _load(SharedPreferences p) => NotificationPrefs(
+  static NotificationPrefs _load(ScopedPrefs p) => NotificationPrefs(
         classes: p.getBool(AppConstants.prefsNotifyClasses) ?? true,
         tasks: p.getBool(AppConstants.prefsNotifyTasks) ?? true,
         exams: p.getBool(AppConstants.prefsNotifyExams) ?? true,
@@ -150,5 +149,5 @@ class NotificationPrefsController extends StateNotifier<NotificationPrefs> {
 
 final notificationPrefsProvider =
     StateNotifierProvider<NotificationPrefsController, NotificationPrefs>((ref) {
-  return NotificationPrefsController(ref.watch(sharedPrefsProvider));
+  return NotificationPrefsController(ref.watch(scopedPrefsProvider));
 });

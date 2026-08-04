@@ -19,9 +19,30 @@ enum TaskFilter { all, inProgress, completed }
 
 extension on TaskFilter {
   String get label => switch (this) {
-        TaskFilter.all => 'All Tasks',
-        TaskFilter.inProgress => 'In Progress',
+        TaskFilter.all => 'All',
+        TaskFilter.inProgress => 'In progress',
         TaskFilter.completed => 'Completed',
+      };
+}
+
+/// How the visible task list is ordered. [smart] keeps the server's
+/// due-then-priority ordering and groups tasks by due-window; the others
+/// present a single flat, explicitly-sorted list.
+enum TaskSort { smart, due, priority, created }
+
+extension on TaskSort {
+  String get label => switch (this) {
+        TaskSort.smart => 'Smart',
+        TaskSort.due => 'Due date',
+        TaskSort.priority => 'Priority',
+        TaskSort.created => 'Recently added',
+      };
+
+  IconData get icon => switch (this) {
+        TaskSort.smart => Icons.auto_awesome_rounded,
+        TaskSort.due => Icons.event_rounded,
+        TaskSort.priority => Icons.flag_rounded,
+        TaskSort.created => Icons.schedule_rounded,
       };
 }
 
@@ -34,6 +55,7 @@ class TasksScreen extends ConsumerStatefulWidget {
 
 class _TasksScreenState extends ConsumerState<TasksScreen> {
   TaskFilter _filter = TaskFilter.all;
+  TaskSort _sort = TaskSort.smart;
   String _query = '';
 
   static void openEditor(BuildContext context, {TaskItem? task}) {
@@ -44,7 +66,59 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
     );
   }
 
-  /// Tasks grouped by due status for a scannable list.
+  // ── Sorting ────────────────────────────────────────────────────────────
+  int _byDue(TaskItem a, TaskItem b) {
+    if (a.done != b.done) return a.done ? 1 : -1;
+    final ad = a.dueDate, bd = b.dueDate;
+    if (ad == null && bd == null) return 0;
+    if (ad == null) return 1;
+    if (bd == null) return -1;
+    return ad.compareTo(bd);
+  }
+
+  int _byPriority(TaskItem a, TaskItem b) {
+    if (a.done != b.done) return a.done ? 1 : -1;
+    if (a.priority != b.priority) {
+      return b.priority.index.compareTo(a.priority.index);
+    }
+    return _byDue(a, b);
+  }
+
+  int _byCreated(TaskItem a, TaskItem b) {
+    if (a.done != b.done) return a.done ? 1 : -1;
+    final ac = a.createdAt, bc = b.createdAt;
+    if (ac == null && bc == null) return 0;
+    if (ac == null) return 1;
+    if (bc == null) return -1;
+    return bc.compareTo(ac); // newest first
+  }
+
+  List<TaskItem> _applySort(List<TaskItem> tasks) {
+    switch (_sort) {
+      case TaskSort.smart:
+        return tasks; // repository already smart-sorts
+      case TaskSort.due:
+        return [...tasks]..sort(_byDue);
+      case TaskSort.priority:
+        return [...tasks]..sort(_byPriority);
+      case TaskSort.created:
+        return [...tasks]..sort(_byCreated);
+    }
+  }
+
+  /// Flat animated list used for the explicit (non-smart) sorts.
+  Widget _flatList(List<TaskItem> tasks) {
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(20, 6, 20, 140),
+      itemCount: tasks.length,
+      itemBuilder: (_, i) => _TaskCard(task: tasks[i])
+          .animate()
+          .fadeIn(delay: (i * 35).ms, duration: 280.ms)
+          .slideY(begin: 0.08, curve: Curves.easeOutCubic),
+    );
+  }
+
+  /// Tasks grouped by due status for a scannable list (Smart sort).
   Widget _groupedList(BuildContext context, List<TaskItem> tasks) {
     final theme = Theme.of(context);
     final now = DateTime.now();
@@ -91,7 +165,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
 
     var i = 0;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 6, 20, 120),
+      padding: const EdgeInsets.fromLTRB(20, 6, 20, 140),
       children: [
         for (final (label, list, color) in sections)
           if (list.isNotEmpty) ...[
@@ -99,42 +173,58 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
             for (final t in list)
               _TaskCard(task: t)
                   .animate()
-                  .fadeIn(delay: (i++ * 40).ms, duration: 300.ms)
+                  .fadeIn(delay: (i++ * 35).ms, duration: 280.ms)
                   .slideY(begin: 0.08, curve: Curves.easeOutCubic),
           ],
       ],
     );
   }
 
-  Widget _progressCard(
-      ThemeData theme, int done, int total, int todo, int overdue) {
+  // ── Hero summary ─────────────────────────────────────────────────────────
+  Widget _hero(ThemeData theme, int done, int total, int todo, int overdue,
+      int dueToday) {
     final pct = total == 0 ? 0.0 : (done / total) * 100;
+    final allDone = total > 0 && done == total;
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: softCard(context),
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(26),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.primary, AppColors.primaryLight],
+        ),
+        boxShadow: AppColors.softShadow(opacity: 0.20, blur: 26),
+      ),
       child: Row(
         children: [
           AnimatedProgressRing(
             percent: pct,
-            size: 56,
-            strokeWidth: 6,
-            color: AppColors.success,
+            size: 74,
+            strokeWidth: 8,
+            color: Colors.white,
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('$done of $total done',
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 8),
-                Row(
+                Text(
+                  allDone ? 'All caught up 🎉' : '$done of $total done',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
                   children: [
-                    _miniStat(theme, '$todo', 'to-do', AppColors.primary),
-                    const SizedBox(width: 8),
-                    _miniStat(theme, '$overdue', 'overdue',
-                        overdue > 0 ? AppColors.danger : AppColors.cancelled),
+                    _heroPill('$todo', 'to-do'),
+                    if (dueToday > 0) _heroPill('$dueToday', 'today'),
+                    if (overdue > 0)
+                      _heroPill('$overdue', 'overdue', danger: true),
                   ],
                 ),
               ],
@@ -145,22 +235,76 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
     );
   }
 
-  Widget _miniStat(ThemeData theme, String value, String label, Color color) {
+  Widget _heroPill(String value, String label, {bool danger = false}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
+        color: danger
+            ? Colors.white.withValues(alpha: 0.95)
+            : Colors.white.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(30),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(value,
               style: TextStyle(
-                  color: color, fontWeight: FontWeight.w800, fontSize: 13)),
+                color: danger ? AppColors.danger : Colors.white,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              )),
           const SizedBox(width: 5),
-          Text(label, style: TextStyle(color: color, fontSize: 12)),
+          Text(label,
+              style: TextStyle(
+                color: danger
+                    ? AppColors.danger
+                    : Colors.white.withValues(alpha: 0.9),
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              )),
         ],
+      ),
+    );
+  }
+
+  // ── Segmented filter ──────────────────────────────────────────────────────
+  Widget _segmentedFilter(ThemeData theme) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: theme.scaffoldBackgroundColor,
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(color: theme.dividerColor),
+      ),
+      child: Row(
+        children: TaskFilter.values.map((f) {
+          final selected = f == _filter;
+          return Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() => _filter = f),
+              behavior: HitTestBehavior.opaque,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOut,
+                padding: const EdgeInsets.symmetric(vertical: 9),
+                decoration: BoxDecoration(
+                  color: selected ? AppColors.primary : Colors.transparent,
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                alignment: Alignment.center,
+                child: Text(
+                  f.label,
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: selected
+                        ? Colors.white
+                        : theme.textTheme.bodySmall?.color,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
@@ -168,35 +312,30 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
   Widget _sectionHeader(
       ThemeData theme, String label, int count, Color color) {
     return Padding(
-      padding: const EdgeInsets.only(top: 8, bottom: 10),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      padding: const EdgeInsets.only(top: 10, bottom: 10),
+      child: Row(
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 8),
+          Text(label,
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w800)),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(20),
             ),
-            const SizedBox(width: 8),
-            Text(label,
+            child: Text('$count',
                 style: TextStyle(
-                    color: color,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12.5)),
-            const SizedBox(width: 6),
-            Text('$count',
-                style: TextStyle(
-                    color: color.withValues(alpha: 0.7),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12.5)),
-          ],
-        ),
+                    color: color, fontWeight: FontWeight.w800, fontSize: 12)),
+          ),
+        ],
       ),
     );
   }
@@ -238,16 +377,33 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
     final todoCount = allTasks.where((t) => !t.done).length;
     final doneCount = allTasks.length - todoCount;
     final overdueCount = allTasks.where((t) => t.isOverdue).length;
+    final now = DateTime.now();
+    final dueTodayCount = allTasks
+        .where((t) =>
+            !t.done &&
+            t.dueDate != null &&
+            DateUtilsX.isSameDay(t.dueDate!, now))
+        .length;
     final canPop = Navigator.of(context).canPop();
 
     return Scaffold(
+      // Only show an in-screen add button when pushed as a standalone route;
+      // as a tab, HomeShell already provides the docked quick-add FAB.
+      floatingActionButton: canPop
+          ? FloatingActionButton.extended(
+              onPressed: () => openEditor(context),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('New task'),
+            )
+          : null,
       body: SafeArea(
         bottom: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Top bar
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              padding: const EdgeInsets.fromLTRB(20, 12, 12, 0),
               child: Row(
                 children: [
                   if (canPop) ...[
@@ -257,12 +413,59 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                     ),
                     const SizedBox(width: 12),
                   ],
-                  const Spacer(),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Your tasks',
+                            style: theme.textTheme.headlineSmall
+                                ?.copyWith(fontWeight: FontWeight.w800)),
+                        Text(
+                          allTasks.isEmpty
+                              ? 'Add your first task'
+                              : (todoCount == 0
+                                  ? 'Everything is done'
+                                  : '$todoCount to do · $doneCount done'),
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Sort
+                  PopupMenuButton<TaskSort>(
+                    tooltip: 'Sort',
+                    icon: const Icon(Icons.sort_rounded),
+                    initialValue: _sort,
+                    onSelected: (s) => setState(() => _sort = s),
+                    itemBuilder: (ctx) => TaskSort.values
+                        .map((s) => PopupMenuItem(
+                              value: s,
+                              child: Row(
+                                children: [
+                                  Icon(s.icon,
+                                      size: 18,
+                                      color: s == _sort
+                                          ? AppColors.primary
+                                          : theme.hintColor),
+                                  const SizedBox(width: 10),
+                                  Text(s.label,
+                                      style: TextStyle(
+                                          fontWeight: s == _sort
+                                              ? FontWeight.w700
+                                              : FontWeight.w500,
+                                          color: s == _sort
+                                              ? AppColors.primary
+                                              : null)),
+                                ],
+                              ),
+                            ))
+                        .toList(),
+                  ),
                   if (doneCount > 0)
-                    TextButton.icon(
+                    IconButton(
+                      tooltip: 'Clear completed',
                       onPressed: () => _clearCompleted(context, allTasks),
-                      icon: const Icon(Icons.done_all_rounded, size: 16),
-                      label: const Text('Clear done'),
+                      icon: const Icon(Icons.done_all_rounded),
                     ),
                   RoundIconButton(
                     icon: Icons.settings_rounded,
@@ -272,35 +475,18 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                 ],
               ),
             ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Your tasks',
-                      style: theme.textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 2),
-                  Text(
-                    allTasks.isEmpty
-                        ? 'Add your first task'
-                        : (todoCount == 0
-                            ? 'All caught up 🎉'
-                            : '$todoCount to do · $doneCount done'),
-                    style: theme.textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
             if (allTasks.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-                child: _progressCard(
-                    theme, doneCount, allTasks.length, todoCount, overdueCount),
+                padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                child: _hero(theme, doneCount, allTasks.length, todoCount,
+                        overdueCount, dueTodayCount)
+                    .animate()
+                    .fadeIn(duration: 320.ms)
+                    .slideY(begin: 0.06, curve: Curves.easeOut),
               ),
             if (allTasks.length > 4)
               Padding(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
                 child: TextField(
                   onChanged: (v) => setState(() => _query = v),
                   decoration: InputDecoration(
@@ -316,48 +502,9 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                   ),
                 ),
               ),
-            SizedBox(
-              height: 56,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-                children: TaskFilter.values.map((f) {
-                  final selected = f == _filter;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 10),
-                    child: GestureDetector(
-                      onTap: () => setState(() => _filter = f),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeOut,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 18, vertical: 9),
-                        decoration: BoxDecoration(
-                          color: selected
-                              ? AppColors.primary
-                              : theme.cardColor,
-                          borderRadius: BorderRadius.circular(30),
-                          border: Border.all(
-                            color: selected
-                                ? AppColors.primary
-                                : theme.dividerColor,
-                          ),
-                        ),
-                        alignment: Alignment.center,
-                        child: Text(
-                          f.label,
-                          style: theme.textTheme.labelLarge?.copyWith(
-                            color: selected
-                                ? Colors.white
-                                : theme.textTheme.bodySmall?.color,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+              child: _segmentedFilter(theme),
             ),
             Expanded(
               child: tasksAsync.when(
@@ -391,12 +538,16 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                           .toList();
                   if (searched.isEmpty) {
                     return Center(
-                      child: Text(
-                          q.isEmpty ? 'Nothing here yet' : 'No matches',
+                      child: Text(q.isEmpty ? 'Nothing here yet' : 'No matches',
                           style: theme.textTheme.bodyMedium),
                     );
                   }
-                  return _groupedList(context, searched);
+                  final ordered = _applySort(searched);
+                  // Smart sort keeps the scannable grouped view; explicit sorts
+                  // (or a single-status filter) show a flat, ordered list.
+                  return _sort == TaskSort.smart && _filter == TaskFilter.all
+                      ? _groupedList(context, ordered)
+                      : _flatList(ordered);
                 },
               ),
             ),
@@ -416,14 +567,12 @@ class _TaskCard extends ConsumerWidget {
     final now = DateTime.now();
     if (task.isOverdue) return 'Overdue';
     if (DateUtilsX.isSameDay(task.dueDate!, now)) return 'Today';
-    if (DateUtilsX.isSameDay(
-        task.dueDate!, now.add(const Duration(days: 1)))) {
+    if (DateUtilsX.isSameDay(task.dueDate!, now.add(const Duration(days: 1)))) {
       return 'Tomorrow';
     }
     return DateUtilsX.prettyDate(task.dueDate!);
   }
 
-  /// Time shown at the top of the card (mirrors the reference's time line).
   String _timeLabel(BuildContext context) {
     final d = task.dueDate;
     if (d == null) return 'No due date';
@@ -440,10 +589,10 @@ class _TaskCard extends ConsumerWidget {
     return Container(
       alignment: alignLeft ? Alignment.centerLeft : Alignment.centerRight,
       padding: const EdgeInsets.symmetric(horizontal: 24),
-      margin: const EdgeInsets.only(bottom: 14),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(22),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -501,6 +650,24 @@ class _TaskCard extends ConsumerWidget {
     );
   }
 
+  void _deleteWithUndo(BuildContext context, WidgetRef ref) {
+    final removed = task;
+    final ctrl = ref.read(taskControllerProvider);
+    ctrl.delete(removed.id);
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.removeCurrentSnackBar();
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(seconds: 4),
+      content: Text('Deleted “${removed.title}”'),
+      action: SnackBarAction(
+        label: 'Undo',
+        // Re-add restores the content (under a fresh id); its reminder is
+        // rescheduled by reminderSyncProvider on the next data change.
+        onPressed: () => ctrl.add(removed),
+      ),
+    ));
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
@@ -519,6 +686,8 @@ class _TaskCard extends ConsumerWidget {
             : (due != null && DateUtilsX.isSameDay(due, DateTime.now()))
                 ? AppColors.primary
                 : theme.hintColor;
+    final subtaskProgress =
+        task.hasSubtasks ? task.subtasksDone / task.subtasks.length : 0.0;
 
     return Dismissible(
       key: ValueKey(task.id),
@@ -539,10 +708,19 @@ class _TaskCard extends ConsumerWidget {
         }
         return true;
       },
-      onDismissed: (_) => ref.read(taskControllerProvider).delete(task.id),
+      onDismissed: (_) => _deleteWithUndo(context, ref),
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
-        decoration: softCard(context),
+        decoration: BoxDecoration(
+          color: theme.cardColor,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(
+            color: overdue && !done
+                ? AppColors.danger.withValues(alpha: 0.35)
+                : theme.dividerColor,
+          ),
+          boxShadow: AppColors.softShadow(opacity: 0.05, blur: 16),
+        ),
         clipBehavior: Clip.antiAlias,
         child: IntrinsicHeight(
           child: Row(
@@ -612,6 +790,20 @@ class _TaskCard extends ConsumerWidget {
                                         task.priority.color),
                                 ],
                               ),
+                              // Subtask progress bar.
+                              if (task.hasSubtasks && !done) ...[
+                                const SizedBox(height: 10),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: LinearProgressIndicator(
+                                    value: subtaskProgress,
+                                    minHeight: 5,
+                                    backgroundColor: theme.dividerColor,
+                                    valueColor: AlwaysStoppedAnimation(
+                                        task.priority.color),
+                                  ),
+                                ),
+                              ],
                             ],
                           ),
                         ),
@@ -857,186 +1049,186 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Center(
-            child: Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 16),
-              decoration: BoxDecoration(
-                color: theme.dividerColor,
-                borderRadius: BorderRadius.circular(4),
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: theme.dividerColor,
+                  borderRadius: BorderRadius.circular(4),
+                ),
               ),
             ),
-          ),
-          Text(_isEdit ? 'Edit item' : 'New item',
-              style: theme.textTheme.titleLarge),
-          const SizedBox(height: 14),
-          Row(
-            children: TaskType.values.map((t) {
-              final selected = t == _type;
-              return Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: GestureDetector(
-                    onTap: () => setState(() => _type = t),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 160),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? t.color.withOpacity(0.14)
-                            : theme.scaffoldBackgroundColor,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: selected ? t.color : theme.dividerColor,
+            Text(_isEdit ? 'Edit item' : 'New item',
+                style: theme.textTheme.titleLarge),
+            const SizedBox(height: 14),
+            Row(
+              children: TaskType.values.map((t) {
+                final selected = t == _type;
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () => setState(() => _type = t),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? t.color.withValues(alpha: 0.14)
+                              : theme.scaffoldBackgroundColor,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: selected ? t.color : theme.dividerColor,
+                          ),
+                        ),
+                        child: Column(
+                          children: [
+                            Icon(t.icon,
+                                size: 20,
+                                color: selected ? t.color : theme.hintColor),
+                            const SizedBox(height: 4),
+                            Text(t.label,
+                                style: theme.textTheme.labelMedium?.copyWith(
+                                  color: selected ? t.color : theme.hintColor,
+                                  fontWeight: FontWeight.w600,
+                                )),
+                          ],
                         ),
                       ),
-                      child: Column(
-                        children: [
-                          Icon(t.icon,
-                              size: 20,
-                              color: selected ? t.color : theme.hintColor),
-                          const SizedBox(height: 4),
-                          Text(t.label,
-                              style: theme.textTheme.labelMedium?.copyWith(
-                                color: selected ? t.color : theme.hintColor,
-                                fontWeight: FontWeight.w600,
-                              )),
-                        ],
-                      ),
                     ),
                   ),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 16),
-          TextField(
-            controller: _title,
-            autofocus: !_isEdit,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(
-              labelText: 'Title',
-              hintText: 'e.g. DBMS assignment 2',
+                );
+              }).toList(),
             ),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _note,
-            maxLines: 2,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(labelText: 'Note (optional)'),
-          ),
-          const SizedBox(height: 14),
-          _subtasksSection(theme),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _link,
-            keyboardType: TextInputType.url,
-            decoration: InputDecoration(
-              labelText: _type == TaskType.task
-                  ? 'Link (optional)'
-                  : '${_type.label} link',
-              hintText: 'https://youtube.com/…',
-              prefixIcon: const Icon(Icons.link_rounded),
-            ),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String?>(
-            value: _subjectId,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Subject (optional)'),
-            items: [
-              const DropdownMenuItem(value: null, child: Text('None')),
-              ...subjects.map((s) => DropdownMenuItem(
-                    value: s.id,
-                    child: Text(s.name, overflow: TextOverflow.ellipsis),
-                  )),
-            ],
-            onChanged: (v) => setState(() => _subjectId = v),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _pickDue,
-                  icon: const Icon(Icons.event_rounded, size: 18),
-                  label: Text(_due == null
-                      ? 'Set due date'
-                      : DateUtilsX.prettyDate(_due!)),
-                ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _title,
+              autofocus: !_isEdit,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Title',
+                hintText: 'e.g. DBMS assignment 2',
               ),
-              if (_due != null)
-                IconButton(
-                  icon: const Icon(Icons.close_rounded),
-                  onPressed: () => setState(() => _due = null),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _note,
+              maxLines: 2,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(labelText: 'Note (optional)'),
+            ),
+            const SizedBox(height: 14),
+            _subtasksSection(theme),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _link,
+              keyboardType: TextInputType.url,
+              decoration: InputDecoration(
+                labelText: _type == TaskType.task
+                    ? 'Link (optional)'
+                    : '${_type.label} link',
+                hintText: 'https://youtube.com/…',
+                prefixIcon: const Icon(Icons.link_rounded),
+              ),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String?>(
+              value: _subjectId,
+              isExpanded: true,
+              decoration:
+                  const InputDecoration(labelText: 'Subject (optional)'),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('None')),
+                ...subjects.map((s) => DropdownMenuItem(
+                      value: s.id,
+                      child: Text(s.name, overflow: TextOverflow.ellipsis),
+                    )),
+              ],
+              onChanged: (v) => setState(() => _subjectId = v),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _pickDue,
+                    icon: const Icon(Icons.event_rounded, size: 18),
+                    label: Text(_due == null
+                        ? 'Set due date'
+                        : DateUtilsX.prettyDate(_due!)),
+                  ),
                 ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text('Priority', style: theme.textTheme.labelLarge),
-          const SizedBox(height: 8),
-          Row(
-            children: TaskPriority.values.map((p) {
-              final selected = p == _priority;
-              return Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: GestureDetector(
-                    onTap: () => setState(() => _priority = p),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 160),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      decoration: BoxDecoration(
-                        color: selected
-                            ? p.color
-                            : p.color.withOpacity(0.12),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: selected ? Colors.white : p.color,
-                              shape: BoxShape.circle,
+                if (_due != null)
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: () => setState(() => _due = null),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text('Priority', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 8),
+            Row(
+              children: TaskPriority.values.map((p) {
+                final selected = p == _priority;
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: GestureDetector(
+                      onTap: () => setState(() => _priority = p),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? p.color
+                              : p.color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: selected ? Colors.white : p.color,
+                                shape: BoxShape.circle,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            p.label,
-                            style: TextStyle(
-                              color: selected ? Colors.white : p.color,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 13,
+                            const SizedBox(width: 6),
+                            Text(
+                              p.label,
+                              style: TextStyle(
+                                color: selected ? Colors.white : p.color,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              );
-            }).toList(),
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _save,
-              child: Text(_isEdit ? 'Save' : 'Add ${_type.label.toLowerCase()}'),
+                );
+              }).toList(),
             ),
-          ),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _save,
+                child: Text(
+                    _isEdit ? 'Save' : 'Add ${_type.label.toLowerCase()}'),
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 }
-
-
 
 /// Editable subtask row backing (text field + done flag).
 class _SubtaskField {

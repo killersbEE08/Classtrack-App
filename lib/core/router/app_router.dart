@@ -1,3 +1,4 @@
+import 'package:firebase_analytics/firebase_analytics.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,12 +12,27 @@ import '../../features/auth/presentation/screens/signup_screen.dart';
 import '../../features/auth/presentation/screens/splash_screen.dart';
 import '../../features/auth/presentation/screens/verify_email_screen.dart';
 import '../../features/home/presentation/screens/home_shell.dart';
+import '../../services/notification_service.dart';
 
 /// App router. Redirects between onboarding → auth → home based on state.
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = ValueNotifier<int>(0);
   ref
-    ..listen(authStateProvider, (_, __) => refresh.value++)
+    ..listen(authStateProvider, (prev, next) {
+      refresh.value++;
+      // On sign-out / account removal, wipe ALL scheduled local notifications
+      // so the previous account's class, task and exam reminders never fire
+      // for the next account on a shared device. The new user's reminders are
+      // re-scheduled by reminderSyncProvider once HomeShell mounts. (An account
+      // switch always passes through a logged-out state, so this also covers
+      // switching users — cancellation happens while signed out, avoiding any
+      // race with the next user's re-scheduling.)
+      final wasLoggedIn = prev?.valueOrNull != null;
+      final nowLoggedIn = next.valueOrNull != null;
+      if (wasLoggedIn && !nowLoggedIn) {
+        ref.read(notificationServiceProvider).cancelAll();
+      }
+    })
     ..listen(onboardingDoneProvider, (_, __) => refresh.value++)
     ..listen(authReloadTickProvider, (_, __) => refresh.value++)
     ..onDispose(refresh.dispose);
@@ -24,6 +40,12 @@ final routerProvider = Provider<GoRouter>((ref) {
   return GoRouter(
     initialLocation: '/splash',
     refreshListenable: refresh,
+    observers: [
+      // Auto-logs a screen_view for each top-level route (splash, onboarding,
+      // login, home, …). Feature screens log their own events via
+      // AnalyticsService. Safe if Analytics isn't reachable.
+      FirebaseAnalyticsObserver(analytics: FirebaseAnalytics.instance),
+    ],
     redirect: (context, state) {
       final auth = ref.read(authStateProvider);
       final loc = state.matchedLocation;

@@ -36,6 +36,11 @@ class ProFeatures {
       'Attendance forecasts, safe-skip counts, spending projections and grade trends.',
     ),
     ProFeature(
+      Icons.shield_moon_rounded,
+      'Attendance risk alerts',
+      'Get warned the evening before a class if skipping it would drop you below your target — with the exact classes needed to recover.',
+    ),
+    ProFeature(
       Icons.today_rounded,
       'Daily agenda summary',
       'A morning notification with today’s classes, deadlines and exams.',

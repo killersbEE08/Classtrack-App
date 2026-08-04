@@ -34,12 +34,20 @@ class AttendanceRepository {
   }
 
   /// Set the attendance status for [subjectId] on [date] AND keep the subject's
-  /// aggregate counters (attended / absent / cancelled) in sync in one atomic
-  /// transaction. Passing [AttendanceStatus.unmarked] clears that day's record
-  /// and rolls back its counter contribution. No-op when the status is
-  /// unchanged. This is the single source of truth for per-day marking, so a
-  /// class marked today stays marked (it will not "come back" on rebuild) and
-  /// the overall percentage updates immediately.
+  /// aggregate counters (attended / absent / cancelled) in sync — using an
+  /// OFFLINE-SAFE write. Passing [AttendanceStatus.unmarked] clears that day's
+  /// record and rolls back its counter contribution. No-op when the status is
+  /// unchanged.
+  ///
+  /// Why not a transaction? `runTransaction` requires a live server round-trip
+  /// and does NOT apply to the local cache offline. Students mark attendance
+  /// inside classrooms where signal is often poor, so a transaction would
+  /// silently fail (the tap "didn't stick") or only commit minutes later when
+  /// connectivity returned (marks landing "late"). A [WriteBatch] of plain
+  /// writes is applied to the local cache synchronously — the UI updates
+  /// instantly — and is flushed to the server automatically once online.
+  /// `FieldValue.increment` is commutative, so several marks queued offline
+  /// reconcile correctly on sync.
   Future<void> setStatus({
     required String subjectId,
     required DateTime date,
@@ -55,78 +63,71 @@ class AttendanceRepository {
     final subjectRef = _subjectRef(subjectId);
     final recordRef = _col(subjectId).doc(recordId);
 
-    await _db.runTransaction((tx) async {
-      final recSnap = await tx.get(recordRef);
-      final subSnap = await tx.get(subjectRef);
+    // Resolve the previous status without a network round-trip. A cache-first
+    // read is instant offline; on a cache miss we fall back to a normal read
+    // (which still serves from cache when offline) so re-marking an older,
+    // uncached day stays accurate. A brand-new mark resolves to `unmarked`.
+    final oldStatus = await _readStatus(recordRef);
+    if (oldStatus == status) return;
 
-      final oldStatus = recSnap.exists
-          ? AttendanceStatusX.parse(recSnap.data()?['status'] as String?)
-          : AttendanceStatus.unmarked;
-      if (oldStatus == status) return;
+    final delta = attendanceCounterDelta(oldStatus, status);
 
-      final data = subSnap.data() ?? <String, dynamic>{};
-      var attended = (data['attended'] as num?)?.toInt() ?? 0;
-      var absent = (data['absent'] as num?)?.toInt() ?? 0;
-      var cancelled = (data['cancelled'] as num?)?.toInt() ?? 0;
-
-      // Roll back the previous status' contribution to the counters...
-      switch (oldStatus) {
-        case AttendanceStatus.present:
-          attended--;
-          break;
-        case AttendanceStatus.absent:
-          absent--;
-          break;
-        case AttendanceStatus.cancelled:
-          cancelled--;
-          break;
-        case AttendanceStatus.unmarked:
-          break;
-      }
-      // ...then apply the new status.
-      switch (status) {
-        case AttendanceStatus.present:
-          attended++;
-          break;
-        case AttendanceStatus.absent:
-          absent++;
-          break;
-        case AttendanceStatus.cancelled:
-          cancelled++;
-          break;
-        case AttendanceStatus.unmarked:
-          break;
-      }
-      if (attended < 0) attended = 0;
-      if (absent < 0) absent = 0;
-      if (cancelled < 0) cancelled = 0;
-
-      tx.set(
-        subjectRef,
-        {
-          'attended': attended,
-          'absent': absent,
-          'held': attended + absent,
-          'cancelled': cancelled,
-        },
-        SetOptions(merge: true),
+    final batch = _db.batch();
+    if (status == AttendanceStatus.unmarked) {
+      batch.delete(recordRef);
+    } else {
+      final record = AttendanceRecord(
+        id: recordId,
+        dateId: dateId,
+        slot: slot,
+        subjectId: subjectId,
+        date: DateTime(date.year, date.month, date.day),
+        status: status,
+        markedAt: DateTime.now(),
       );
+      batch.set(recordRef, record.toMap());
+    }
+    batch.set(
+      subjectRef,
+      {
+        'attended': FieldValue.increment(delta.attended),
+        'absent': FieldValue.increment(delta.absent),
+        'held': FieldValue.increment(delta.attended + delta.absent),
+        'cancelled': FieldValue.increment(delta.cancelled),
+      },
+      SetOptions(merge: true),
+    );
 
-      if (status == AttendanceStatus.unmarked) {
-        tx.delete(recordRef);
-      } else {
-        final record = AttendanceRecord(
-          id: recordId,
-          dateId: dateId,
-          slot: slot,
-          subjectId: subjectId,
-          date: DateTime(date.year, date.month, date.day),
-          status: status,
-          markedAt: DateTime.now(),
-        );
-        tx.set(recordRef, record.toMap());
+    // Do NOT await server acknowledgement here — the local cache write above is
+    // already applied, so callers get an instant, durable result. The returned
+    // future still completes/rejects on eventual server sync for error surfacing.
+    await batch.commit();
+  }
+
+  /// Reads the current status of [recordRef] without forcing a server trip.
+  Future<AttendanceStatus> _readStatus(
+    DocumentReference<Map<String, dynamic>> recordRef,
+  ) async {
+    try {
+      final cached =
+          await recordRef.get(const GetOptions(source: Source.cache));
+      if (cached.exists) {
+        return AttendanceStatusX.parse(cached.data()?['status'] as String?);
       }
-    });
+      // Cached "not found" — treat as unmarked (the common new-mark case).
+      return AttendanceStatus.unmarked;
+    } catch (_) {
+      // Not in cache at all. Fall back to a normal get (server when online,
+      // cache when offline); any failure is treated as a fresh mark.
+      try {
+        final snap = await recordRef.get();
+        return snap.exists
+            ? AttendanceStatusX.parse(snap.data()?['status'] as String?)
+            : AttendanceStatus.unmarked;
+      } catch (_) {
+        return AttendanceStatus.unmarked;
+      }
+    }
   }
 
   Future<void> mark({

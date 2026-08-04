@@ -19,13 +19,19 @@ class ProConstants {
 
   /// Public SDK keys (safe to ship). Get these from RevenueCat → API keys.
   /// A build-time --dart-define overrides these defaults when provided.
+  ///
+  /// IMPORTANT: leave the defaults EMPTY. A `test_...` key makes the
+  /// RevenueCat SDK show a "Wrong API Key" dialog and force-close the app in
+  /// real builds. Supply your real public key (Android: `goog_...`,
+  /// iOS: `appl_...`) at build time via --dart-define, e.g.:
+  ///   flutter run --dart-define=REVENUECAT_ANDROID_KEY=goog_xxx
   static const String _androidApiKey = String.fromEnvironment(
     'REVENUECAT_ANDROID_KEY',
-    defaultValue: 'test_WlhbxhlpEdwcssWwIFPOnXdvMkE',
+    defaultValue: '',
   );
   static const String _iosApiKey = String.fromEnvironment(
     'REVENUECAT_IOS_KEY',
-    defaultValue: 'test_WlhbxhlpEdwcssWwIFPOnXdvMkE',
+    defaultValue: '',
   );
 
   /// Resolves the correct key for the current platform (empty when unset).

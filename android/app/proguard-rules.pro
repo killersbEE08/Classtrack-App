@@ -28,5 +28,20 @@
 -dontwarn com.google.android.play.core.**
 -keep class com.google.android.play.core.** { *; }
 
+# --- WorkManager + Room ----------------------------------------------------
+# home_widget pulls in androidx.work, whose WorkDatabase is a Room database
+# instantiated by reflection at startup (via the WorkManagerInitializer
+# ContentProvider). Without these keeps, R8 strips Room's generated *_Impl
+# classes and the app crashes on launch with:
+#   "Failed to create an instance of androidx.work.impl.WorkDatabase".
+-keep class androidx.work.** { *; }
+-keep class androidx.room.** { *; }
+-keep class androidx.sqlite.** { *; }
+-keep class * extends androidx.room.RoomDatabase { <init>(); }
+-keep class * extends androidx.work.ListenableWorker { <init>(...); }
+-keep class * extends androidx.work.Worker
+-dontwarn androidx.work.**
+-dontwarn androidx.room.**
+
 # Keep annotations and generic signatures used across the app.
 -keepattributes InnerClasses,EnclosingMethod

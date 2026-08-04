@@ -44,8 +44,15 @@ class SubjectDetailScreen extends ConsumerWidget {
       ),
     );
     if (ok == true) {
-      await ref.read(subjectRepositoryProvider)?.delete(subject.id);
-      if (context.mounted) Navigator.of(context).pop();
+      try {
+        await ref.read(subjectRepositoryProvider)?.delete(subject.id);
+        if (context.mounted) Navigator.of(context).pop();
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('Could not delete: $e')));
+        }
+      }
     }
   }
 
@@ -70,8 +77,9 @@ class SubjectDetailScreen extends ConsumerWidget {
     final stats =
         AttendanceStats(present: subject.attended, absent: subject.missed);
     final target =
-        ref.watch(userProfileProvider).valueOrNull?.targetAttendancePercent ??
-            AppConstants.defaultTargetAttendance;
+        subject.effectiveTarget(
+            ref.watch(userProfileProvider).valueOrNull?.targetAttendancePercent ??
+                AppConstants.defaultTargetAttendance);
     final sessions =
         ref.watch(sessionsForSubjectProvider(subject.id)).valueOrNull ?? const [];
     // Hide identical duplicate sessions (e.g. a class accidentally added twice)
