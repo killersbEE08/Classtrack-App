@@ -12,6 +12,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/providers/app_settings_provider.dart';
 import '../../../../services/analytics_service.dart';
 import '../../../../services/notification_service.dart';
+import '../../../../services/push_messaging_service.dart';
 import '../../../../services/reminder_scheduler.dart';
 import '../../../../services/home_widget_service.dart';
 import '../../../insights/presentation/screens/daily_agenda_screen.dart';
@@ -478,6 +479,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     ref.watch(reminderSyncProvider);
     // Keep RevenueCat's identity tied to the signed-in Firebase user.
     ref.watch(subscriptionAuthLinkProvider);
+    // Keep the device subscribed to its profile country's push topic.
+    ref.watch(pushCountryTopicSyncProvider);
     // Keep the home-screen widget's "today" snapshot fresh.
     ref.watch(homeWidgetSyncProvider);
     return PopScope(

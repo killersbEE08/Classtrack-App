@@ -38,6 +38,7 @@ import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../../tasks/domain/task_item.dart';
 import '../../../tasks/presentation/providers/task_providers.dart';
 import '../../../tasks/presentation/screens/tasks_screen.dart';
+import '../widgets/home_banner.dart';
 
 /// Home dashboard. Answers "what matters to me today?" with a concise overview
 /// strip, today's timeline, three focused cards (attendance / next exam /
@@ -67,6 +68,7 @@ class DashboardScreen extends ConsumerWidget {
             const _TodayOverview().animate().fadeIn(duration: 350.ms).slideY(
                 begin: 0.06, curve: Curves.easeOut),
             const SizedBox(height: 22),
+            const HomeBanner(),
             SectionHeader(
               title: "Today's timeline",
               actionLabel: 'View full day',

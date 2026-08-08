@@ -5,6 +5,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../firebase_options.dart';
+import '../features/auth/presentation/providers/auth_providers.dart';
 import 'notification_service.dart';
 
 /// Android channel used to *display* Firebase Cloud Messaging pushes. It must
@@ -53,6 +54,46 @@ class PushMessagingService {
   final FlutterLocalNotificationsPlugin _local;
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
   bool _ready = false;
+
+  /// The country topic this device is currently subscribed to (e.g.
+  /// `country_india`), or null. Tracked so a profile country change can move
+  /// the subscription without leaving stale ones behind.
+  String? _countryTopic;
+
+  /// FCM topic for a profile country, matching the server's slug rules
+  /// (functions/notifications.js). Null for empty/"Global".
+  static String? countryTopicFor(String? country) {
+    if (country == null) return null;
+    final c = country.trim().toLowerCase();
+    if (c.isEmpty || c == 'global') return null;
+    final slug = c
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return slug.isEmpty ? null : 'country_$slug';
+  }
+
+  /// Subscribes this device to its profile country's topic (and unsubscribes
+  /// from a previous one) so CMS country-targeted notifications are delivered.
+  /// Best-effort and bounded — never blocks or throws.
+  Future<void> setCountryTopic(String? country) async {
+    if (kIsWeb) return;
+    final topic = countryTopicFor(country);
+    if (topic == _countryTopic) return;
+    final previous = _countryTopic;
+    _countryTopic = topic;
+    if (previous != null) {
+      try {
+        await _fcm
+            .unsubscribeFromTopic(previous)
+            .timeout(const Duration(seconds: 5));
+      } catch (_) {/* best-effort */}
+    }
+    if (topic != null) {
+      try {
+        await _fcm.subscribeToTopic(topic).timeout(const Duration(seconds: 5));
+      } catch (_) {/* best-effort */}
+    }
+  }
 
   /// Initialise messaging: request permission, create the Android display
   /// channel, wire foreground/tap handlers and subscribe to the broadcast
@@ -180,3 +221,13 @@ class PushMessagingService {
 final pushMessagingServiceProvider = Provider<PushMessagingService>(
   (ref) => PushMessagingService(),
 );
+
+/// Keeps the device subscribed to its profile country's FCM topic so
+/// CMS country-targeted notifications are delivered. Watch it where the app is
+/// alive (HomeShell) so it re-runs when the profile country changes.
+final pushCountryTopicSyncProvider = Provider<void>((ref) {
+  final country =
+      ref.watch(userProfileProvider.select((a) => a.valueOrNull?.country));
+  // Fire-and-forget; the service call is bounded and never throws.
+  ref.read(pushMessagingServiceProvider).setCountryTopic(country);
+});
