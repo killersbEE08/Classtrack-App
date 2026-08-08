@@ -8,6 +8,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../attendance/presentation/providers/attendance_providers.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
+import '../../../exams/presentation/providers/exam_providers.dart';
 import '../../../expenses/domain/expense.dart';
 import '../../../expenses/presentation/providers/expense_providers.dart';
 import '../../../focus/presentation/providers/study_providers.dart';
@@ -32,6 +33,7 @@ class InsightsScreen extends ConsumerWidget {
     final cards = <Widget>[
       _AiInsightsCard(),
       _attendanceCard(context, ref, theme, target),
+      _examsCard(context, ref, theme),
       _budgetCard(context, ref, theme),
       _gradeCard(context, ref, theme),
       _studyCard(context, ref, theme),
@@ -200,6 +202,131 @@ class InsightsScreen extends ConsumerWidget {
                 color: Color(s.colorHex),
                 trailing: trailing,
                 trailingColor: subColor,
+              );
+            }),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── Exams ──────────────────────────────────────────────────────────────
+  Widget _examsCard(BuildContext context, WidgetRef ref, ThemeData theme) {
+    final upcoming = ref.watch(upcomingExamsProvider);
+    final past = ref.watch(pastExamsProvider);
+    final subjects = ref.watch(subjectsStreamProvider).valueOrNull ?? const [];
+
+    String subjectName(String? id) {
+      if (id == null) return '';
+      for (final s in subjects) {
+        if (s.id == id) return s.name;
+      }
+      return '';
+    }
+
+    Color subjectColor(String? id) {
+      if (id == null) return AppColors.danger;
+      for (final s in subjects) {
+        if (s.id == id) return Color(s.colorHex);
+      }
+      return AppColors.danger;
+    }
+
+    return _card(
+      theme,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _header(theme, Icons.event_note_rounded, 'Exams',
+              color: AppColors.danger,
+              trailing: upcoming.isEmpty
+                  ? null
+                  : _pill(theme,
+                      '${upcoming.length} upcoming', AppColors.danger)),
+          const SizedBox(height: 8),
+          if (upcoming.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Text(
+                past.isEmpty
+                    ? 'Add your exams to see live countdowns and how ready you are for each one.'
+                    : 'No upcoming exams — you’re all caught up. 🎉',
+                style: theme.textTheme.bodyMedium,
+              ),
+            )
+          else ...[
+            // The soonest exam, highlighted with a live countdown.
+            Builder(builder: (context) {
+              final next = upcoming.first;
+              final subj = subjectName(next.subjectId);
+              final d = next.daysUntil;
+              final countColor = d <= 2
+                  ? AppColors.danger
+                  : (d <= 7 ? AppColors.warning : AppColors.success);
+              return Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: countColor.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Next up',
+                              style: theme.textTheme.labelSmall
+                                  ?.copyWith(color: theme.hintColor)),
+                          const SizedBox(height: 2),
+                          Text(next.title,
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w800),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis),
+                          if (subj.isNotEmpty)
+                            Text(subj,
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(color: theme.hintColor)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(next.countdownLabel,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                color: countColor)),
+                        if (next.hasTopics)
+                          Text('${(next.readiness * 100).toStringAsFixed(0)}% ready',
+                              style: theme.textTheme.labelSmall
+                                  ?.copyWith(color: theme.hintColor)),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }),
+            const SizedBox(height: 12),
+            Text('Prep readiness',
+                style: theme.textTheme.labelLarge
+                    ?.copyWith(color: theme.hintColor)),
+            const SizedBox(height: 4),
+            // Revision progress per upcoming exam (topics checked off).
+            ...upcoming.take(6).map((e) {
+              final label = subjectName(e.subjectId).isEmpty
+                  ? e.title
+                  : '${e.title} · ${subjectName(e.subjectId)}';
+              final ready = e.hasTopics ? e.readiness : 0.0;
+              return BarRow(
+                label: label,
+                fraction: ready,
+                color: subjectColor(e.subjectId),
+                trailing:
+                    e.hasTopics ? '${(ready * 100).toStringAsFixed(0)}%' : e.countdownLabel,
+                trailingColor: e.hasTopics ? null : theme.hintColor,
               );
             }),
           ],

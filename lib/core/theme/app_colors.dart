@@ -62,7 +62,7 @@ class AppColors {
   static List<BoxShadow> softShadow({double opacity = 0.08, double blur = 24}) =>
       [
         BoxShadow(
-          color: primary.withOpacity(opacity),
+          color: primary.withValues(alpha: opacity),
           blurRadius: blur,
           offset: const Offset(0, 10),
         ),

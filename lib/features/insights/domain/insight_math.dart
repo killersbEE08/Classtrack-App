@@ -39,7 +39,7 @@ AttendanceAdvice attendanceAdvice({
   required double target,
 }) {
   if (held <= 0) {
-    return AttendanceAdvice(
+    return const AttendanceAdvice(
         percent: 0, canSkip: 0, mustAttend: 0, onTrack: true);
   }
   final percent = attended * 100.0 / held;

@@ -16,7 +16,8 @@ String friendlyAuthError(Object error) {
       case 'email-already-in-use':
         return 'An account already exists for that email.';
       case 'weak-password':
-        return 'Please choose a stronger password (6+ characters).';
+        return 'Please choose a stronger password — at least 8 characters '
+            'with letters and numbers.';
       case 'network-request-failed':
         return 'Network error. Check your connection and try again.';
       case 'requires-recent-login':

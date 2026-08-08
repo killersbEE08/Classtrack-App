@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/utils/validators.dart';
 import '../../../../shared/widgets/buttons.dart';
 import '../auth_errors.dart';
 import '../providers/auth_providers.dart';
@@ -68,6 +69,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
           padding: const EdgeInsets.all(24),
           child: Form(
             key: _formKey,
+            autovalidateMode: AutovalidateMode.onUserInteraction,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -85,8 +87,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                     labelText: 'Full name',
                     prefixIcon: Icon(Icons.person_outline_rounded),
                   ),
-                  validator: (v) =>
-                      (v == null || v.trim().isEmpty) ? 'Enter your name' : null,
+                  validator: Validators.name,
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
@@ -97,26 +98,27 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                     labelText: 'Email',
                     prefixIcon: Icon(Icons.mail_outline_rounded),
                   ),
-                  validator: (v) => (v == null || !v.contains('@'))
-                      ? 'Enter a valid email'
-                      : null,
+                  validator: Validators.email,
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _password,
                   obscureText: _obscure,
+                  autofillHints: const [AutofillHints.newPassword],
                   decoration: InputDecoration(
                     labelText: 'Password',
+                    helperText: Validators.passwordPolicyHint,
+                    helperMaxLines: 2,
                     prefixIcon: const Icon(Icons.lock_outline_rounded),
                     suffixIcon: IconButton(
+                      tooltip: _obscure ? 'Show password' : 'Hide password',
                       icon: Icon(_obscure
                           ? Icons.visibility_outlined
                           : Icons.visibility_off_outlined),
                       onPressed: () => setState(() => _obscure = !_obscure),
                     ),
                   ),
-                  validator: (v) =>
-                      (v == null || v.length < 6) ? 'Min 6 characters' : null,
+                  validator: Validators.password,
                 ),
                 const SizedBox(height: 24),
                 LoadingButton(

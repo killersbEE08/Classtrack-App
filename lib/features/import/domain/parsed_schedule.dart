@@ -7,14 +7,23 @@ class ParsedSession {
   String end; // "HH:MM"
   String? room;
 
+  /// When set, this is a ONE-OFF session on this specific calendar date rather
+  /// than a weekly-recurring one. Keeps single events (a one-time webinar,
+  /// make-up class, etc.) from repeating every week / showing on the import day.
+  DateTime? date;
+
   ParsedSession({
     required this.day,
     required this.start,
     required this.end,
     this.room,
+    this.date,
   });
 
   int? get dayIndex => Weekdays.parse(day);
+
+  /// True when this is a weekly-recurring session (no specific date attached).
+  bool get isRecurring => date == null;
 
   factory ParsedSession.fromJson(Map<String, dynamic> json) => ParsedSession(
         day: (json['day'] as String?) ?? 'Monday',
@@ -22,6 +31,23 @@ class ParsedSession {
         end: (json['end'] as String?) ?? '10:00',
         room: json['room'] as String?,
       );
+}
+
+/// One parsed task/assignment/deadline extracted from a one-off calendar event
+/// (editable in the review screen). Committed to the Tasks list rather than to
+/// attendance, so homework/quizzes/submissions don't inflate attendance.
+class ParsedTask {
+  String title;
+  DateTime? due;
+  String? link;
+  bool include; // user toggle in review screen
+
+  ParsedTask({
+    required this.title,
+    this.due,
+    this.link,
+    this.include = true,
+  });
 }
 
 /// One parsed subject with its sessions.
@@ -67,9 +93,18 @@ class ParsedSubject {
 /// Full result returned by the parseSchedule Cloud Function.
 class ParsedSchedule {
   final List<ParsedSubject> subjects;
+
+  /// One-off items that look like assignments/deadlines rather than classes.
+  /// Routed to the Tasks list on commit (not to attendance).
+  final List<ParsedTask> tasks;
+
   final String confidence; // high | medium | low
 
-  ParsedSchedule({required this.subjects, required this.confidence});
+  ParsedSchedule({
+    required this.subjects,
+    this.tasks = const [],
+    required this.confidence,
+  });
 
   factory ParsedSchedule.fromJson(Map<String, dynamic> json) => ParsedSchedule(
         subjects: ((json['subjects'] as List<dynamic>?) ?? [])
@@ -79,5 +114,5 @@ class ParsedSchedule {
         confidence: (json['confidence'] as String?) ?? 'low',
       );
 
-  bool get isEmpty => subjects.isEmpty;
+  bool get isEmpty => subjects.isEmpty && tasks.isEmpty;
 }

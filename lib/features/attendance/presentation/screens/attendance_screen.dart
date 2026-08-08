@@ -8,6 +8,7 @@ import '../../../../shared/widgets/states.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../../../shared/widgets/progress_ring.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
+import '../../../import/presentation/screens/import_screen.dart';
 import '../../../subjects/domain/subject.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../../subjects/presentation/screens/edit_subject_screen.dart';
@@ -49,13 +50,6 @@ class AttendanceScreen extends ConsumerWidget {
                   ],
                   Text('Attendance', style: theme.textTheme.displaySmall),
                   const Spacer(),
-                  PillTag(
-                    label: 'Target ${target.toStringAsFixed(0)}%',
-                    icon: Icons.flag_rounded,
-                    background: AppColors.lavenderTint,
-                    foreground: AppColors.ink,
-                  ),
-                  const SizedBox(width: 10),
                   RoundIconButton(
                     icon: Icons.add_rounded,
                     background: AppColors.primary,
@@ -74,15 +68,13 @@ class AttendanceScreen extends ConsumerWidget {
                 error: (e, _) => ErrorView(error: e),
                 data: (subjects) {
                   if (subjects.isEmpty) {
-                    return EmptyState(
-                      icon: PhosphorIcons.chartPieSlice(),
-                      title: 'No subjects yet',
-                      message:
-                          'Add subjects first, then track how many classes you attend for each.',
-                    );
+                    return const _NoSubjectsView();
                   }
                   return ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+                    // Extra bottom padding so the last subject's mark buttons
+                    // clear the floating bottom nav bar + FAB (the shell uses
+                    // extendBody: true, so content draws under the pill).
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
                     children: [
                       _OverallCard(overall: overall, target: target),
                       const SizedBox(height: 20),
@@ -212,7 +204,7 @@ class _OverallCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.15),
+          color: Colors.white.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(14),
         ),
         child: Column(
@@ -278,7 +270,7 @@ class _SubjectAttendanceCard extends ConsumerWidget {
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.15),
+                    color: color.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(13),
                   ),
                   child: Icon(Icons.menu_book_rounded, color: color, size: 22),
@@ -353,7 +345,7 @@ class _SubjectAttendanceCard extends ConsumerWidget {
               const SizedBox(width: 8),
               // Manual counts editor.
               Material(
-                color: AppColors.lavenderSoft,
+                color: AppColors.primary.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(13),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(13),
@@ -391,7 +383,7 @@ class _SubjectAttendanceCard extends ConsumerWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: tint.withOpacity(0.1),
+        color: tint.withValues(alpha: 0.1),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Row(
@@ -451,7 +443,7 @@ class _ProgressBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final tickColor = theme.brightness == Brightness.light
-        ? AppColors.ink.withOpacity(0.35)
+        ? AppColors.ink.withValues(alpha: 0.35)
         : Colors.white54;
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -463,7 +455,7 @@ class _ProgressBar extends StatelessWidget {
               Positioned.fill(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: theme.dividerColor.withOpacity(0.5),
+                    color: theme.dividerColor.withValues(alpha: 0.5),
                     borderRadius: BorderRadius.circular(6),
                   ),
                 ),
@@ -507,7 +499,7 @@ class _ActionButton extends StatelessWidget {
     final color = status.color;
     return Expanded(
       child: Material(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(13),
         child: InkWell(
           borderRadius: BorderRadius.circular(13),
@@ -656,10 +648,13 @@ class _StepperCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final cardBg = theme.brightness == Brightness.dark
+        ? AppColors.darkSurfaceAlt
+        : AppColors.lavenderSoft;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: AppColors.lavenderSoft,
+        color: cardBg,
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
@@ -705,7 +700,7 @@ class _RoundStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: color.withOpacity(0.14),
+      color: color.withValues(alpha: 0.14),
       shape: const CircleBorder(),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -714,6 +709,157 @@ class _RoundStep extends StatelessWidget {
           width: 38,
           height: 38,
           child: Icon(icon, size: 20, color: color),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+/// Empty state shown to a brand-new user with no subjects yet. Puts a big,
+/// centered add button front-and-centre that opens a chooser to create a
+/// subject, import from Google Calendar, or scan a timetable photo.
+class _NoSubjectsView extends ConsumerWidget {
+  const _NoSubjectsView();
+
+  void _showStartOptions(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        Widget option({
+          required IconData icon,
+          required Color color,
+          required String title,
+          required String subtitle,
+          required VoidCallback onTap,
+        }) {
+          return ListTile(
+            onTap: onTap,
+            leading: Container(
+              width: 46,
+              height: 46,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: color),
+            ),
+            title: Text(title, style: theme.textTheme.titleMedium),
+            subtitle: Text(subtitle, style: theme.textTheme.bodySmall),
+            trailing: const Icon(Icons.chevron_right_rounded),
+          );
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: Text('Add subjects', style: theme.textTheme.titleLarge),
+              ),
+              option(
+                icon: Icons.menu_book_rounded,
+                color: AppColors.primary,
+                title: 'Create a subject',
+                subtitle: 'Add one course and track its attendance',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const EditSubjectScreen()));
+                },
+              ),
+              option(
+                icon: Icons.document_scanner_rounded,
+                color: AppColors.coral,
+                title: 'Scan a timetable',
+                subtitle: 'Free — read a photo or paste text with AI',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => const ImportScreen(freeAccess: true)),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(22),
+              decoration: BoxDecoration(
+                color: AppColors.accent.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(PhosphorIcons.chartPieSlice(),
+                  size: 44, color: AppColors.accent),
+            ),
+            const SizedBox(height: 20),
+            Text('No subjects yet',
+                style: theme.textTheme.titleLarge,
+                textAlign: TextAlign.center),
+            const SizedBox(height: 8),
+            Text(
+              'Add subjects first, then track how many classes you attend '
+              'for each.',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.textTheme.bodySmall?.color),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 28),
+            // Big, centered add button — the primary call-to-action for new
+            // users. Opens a chooser (create / import / scan).
+            Semantics(
+              button: true,
+              label: 'Add subjects',
+              child: InkWell(
+                borderRadius: BorderRadius.circular(40),
+                onTap: () => _showStartOptions(context, ref),
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [AppColors.primaryLight, AppColors.primary],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.primary.withValues(alpha: 0.40),
+                        blurRadius: 18,
+                        offset: const Offset(0, 8),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.add_rounded,
+                      color: Colors.white, size: 34),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text('Create subject · Import · Scan timetable',
+                style: theme.textTheme.bodySmall, textAlign: TextAlign.center),
+          ],
         ),
       ),
     );

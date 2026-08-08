@@ -35,6 +35,13 @@ class SubjectRepository {
     return ref.id;
   }
 
+  /// One-shot read of all subjects (used by import to reuse existing subjects
+  /// instead of creating duplicates on re-import).
+  Future<List<Subject>> getAll() async {
+    final snap = await _col.get();
+    return snap.docs.map((d) => Subject.fromMap(d.id, d.data())).toList();
+  }
+
   /// Create with a known id (used by AI import batch writes).
   Future<void> setWithId(String id, Subject subject) =>
       _col.doc(id).set(subject.toMap());

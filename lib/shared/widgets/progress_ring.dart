@@ -47,7 +47,7 @@ class ProgressRing extends StatelessWidget {
           color: ringColor,
           // A faint tint of the ring colour reads as a soft pastel track,
           // matching the app's minimalist vibe far better than a heavy grey.
-          track: ringColor.withOpacity(0.15),
+          track: ringColor.withValues(alpha: 0.15),
           strokeWidth: strokeWidth,
         ),
         child: Center(

@@ -12,6 +12,8 @@ import '../../../schedule/presentation/providers/schedule_providers.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../../tasks/domain/task_item.dart';
 import '../../../tasks/presentation/providers/task_providers.dart';
+import '../../../tips/domain/discoverable_feature.dart';
+import '../../../tips/presentation/providers/tips_providers.dart';
 import '../../data/daily_agenda_pdf.dart';
 import '../providers/insights_ai_providers.dart';
 
@@ -458,6 +460,12 @@ class _AiSummaryCard extends ConsumerWidget {
     final theme = Theme.of(context);
     final state = ref.watch(dailyAgendaControllerProvider);
     final controller = ref.read(dailyAgendaControllerProvider.notifier);
+    // Wrap generation so the "AI daily summary" feature is marked as tried on
+    // the Tips & Tricks checklist the first time it's used.
+    void onGenerate() {
+      ref.read(featureUsageProvider.notifier).markUsed(FeatureId.dailySummary);
+      controller.generate();
+    }
 
     return Container(
       width: double.infinity,
@@ -494,21 +502,21 @@ class _AiSummaryCard extends ConsumerWidget {
               if (state != null && !state.isLoading)
                 IconButton(
                   tooltip: 'Regenerate',
-                  onPressed: controller.generate,
+                  onPressed: onGenerate,
                   icon: const Icon(Icons.refresh_rounded,
                       color: AppColors.primary),
                 ),
             ],
           ),
           const SizedBox(height: 6),
-          _body(context, theme, state, controller),
+          _body(context, theme, state, onGenerate),
         ],
       ),
     );
   }
 
   Widget _body(BuildContext context, ThemeData theme, AsyncValue<String>? state,
-      AiTextController controller) {
+      VoidCallback onGenerate) {
     if (state == null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -521,7 +529,7 @@ class _AiSummaryCard extends ConsumerWidget {
           ),
           const SizedBox(height: 14),
           FilledButton.icon(
-            onPressed: controller.generate,
+            onPressed: onGenerate,
             style: FilledButton.styleFrom(
               shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14)),
@@ -558,7 +566,7 @@ class _AiSummaryCard extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           FilledButton.icon(
-            onPressed: controller.generate,
+            onPressed: onGenerate,
             icon: const Icon(Icons.refresh_rounded, size: 18),
             label: const Text('Retry'),
           ),

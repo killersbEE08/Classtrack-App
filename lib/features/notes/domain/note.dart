@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/models/checklist_item.dart';
+import '../../../core/utils/validators.dart';
 import 'flashcard.dart';
 import 'note_attachment.dart';
 
@@ -95,8 +96,8 @@ class Note {
   }
 
   Map<String, dynamic> toMap() => {
-        'title': title,
-        'body': body,
+        'title': Validators.sanitizeText(title, maxLength: 200),
+        'body': Validators.sanitizeText(body, multiline: true),
         'subjectId': subjectId,
         'linkedExamId': linkedExamId,
         'colorHex': colorHex,
@@ -115,8 +116,10 @@ class Note {
   factory Note.fromMap(String id, Map<String, dynamic> map) {
     return Note(
       id: id,
-      title: (map['title'] as String?) ?? '',
-      body: (map['body'] as String?) ?? '',
+      title: Validators.sanitizeText((map['title'] as String?) ?? '',
+          maxLength: 200),
+      body: Validators.sanitizeText((map['body'] as String?) ?? '',
+          multiline: true),
       subjectId: map['subjectId'] as String?,
       linkedExamId: map['linkedExamId'] as String?,
       colorHex: (map['colorHex'] as num?)?.toInt(),

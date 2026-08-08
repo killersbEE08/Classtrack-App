@@ -32,6 +32,8 @@ import '../../../subscription/domain/pro_constants.dart';
 import '../../../subscription/presentation/providers/subscription_providers.dart';
 import '../../../tasks/domain/task_item.dart';
 import '../../../tasks/presentation/providers/task_providers.dart';
+import '../../../tips/domain/discoverable_feature.dart';
+import '../../../tips/presentation/providers/tips_providers.dart';
 import '../../domain/chat_message.dart';
 import '../../data/chat_repository.dart';
 import '../../domain/chat_session.dart';
@@ -51,9 +53,9 @@ class ChatState {
 const _welcome = ChatMessage(
   role: ChatRole.assistant,
   text: "Hi! I'm your ClassTrack assistant. 👋\n\n"
-      "Tell me your timetable in plain words (e.g. \"Mon & Wed 9–10 DBMS in Room 204, "
+      'Tell me your timetable in plain words (e.g. "Mon & Wed 9–10 DBMS in Room 204, '
       "Tue 11–12 Maths\") or attach a photo of it, and I'll build your schedule. "
-      "You can also ask me for study or attendance tips.",
+      'You can also ask me for study or attendance tips.',
 );
 
 /// A restorable AI deletion: a human label plus a closure that re-creates the
@@ -62,6 +64,25 @@ class PendingUndo {
   final String label;
   final Future<void> Function() restore;
   const PendingUndo(this.label, this.restore);
+}
+
+/// Tally of what a batch of AI actions actually did, so the chat can report the
+/// truth instead of echoing the model's (sometimes over-optimistic) "Done".
+/// [attempted] counts recognised actions we tried to run; [succeeded] counts
+/// the ones that actually changed data (a create/update that found its target,
+/// or the number of items a delete removed).
+class ActionOutcome {
+  int attempted = 0;
+  int succeeded = 0;
+  void record(bool ok) {
+    attempted++;
+    if (ok) succeeded++;
+  }
+
+  void recordCount(int n) {
+    attempted++;
+    if (n > 0) succeeded += n;
+  }
 }
 
 class ChatController extends StateNotifier<ChatState> {
@@ -115,6 +136,29 @@ class ChatController extends StateNotifier<ChatState> {
 
   /// Compact snapshot of the user's data so the assistant can answer questions
   /// about their attendance, tasks, exams, GPA, expenses, study and habits.
+  /// Human-readable free windows BETWEEN a day's classes, so the assistant can
+  /// answer "when am I free today/tomorrow?" accurately instead of guessing.
+  /// Returns null when there aren't at least two classes to sit between.
+  String? _freeGaps(List<ScheduledClass> classes) {
+    if (classes.length < 2) return null;
+    final sorted = [...classes]..sort((a, b) =>
+        DateUtilsX.minutesOfDay(a.session.startTime)
+            .compareTo(DateUtilsX.minutesOfDay(b.session.startTime)));
+    String fmt(int m) =>
+        '${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
+    final gaps = <String>[];
+    for (var i = 0; i < sorted.length - 1; i++) {
+      final endPrev = DateUtilsX.minutesOfDay(sorted[i].session.endTime);
+      final startNext =
+          DateUtilsX.minutesOfDay(sorted[i + 1].session.startTime);
+      // Only count a real break (≥ 15 min) between back-to-back classes.
+      if (startNext - endPrev >= 15) {
+        gaps.add('${fmt(endPrev)}–${fmt(startNext)}');
+      }
+    }
+    return gaps.isEmpty ? null : gaps.join(', ');
+  }
+
   String _buildContext() {
     final sb = StringBuffer();
     final now = DateTime.now();
@@ -126,8 +170,8 @@ class ChatController extends StateNotifier<ChatState> {
       final first = profileName.split(RegExp(r'\s+')).first;
       sb.writeln(
           "The student's name is $first. Greet or address them by their first "
-          "name occasionally when it feels natural (for example in a greeting) "
-          "— not in every message.");
+          'name occasionally when it feels natural (for example in a greeting) '
+          '— not in every message.');
     }
     final subjects = _ref.read(subjectsStreamProvider).valueOrNull ?? const [];
     final overall = _ref.read(overallStatsProvider);
@@ -145,14 +189,30 @@ class ChatController extends StateNotifier<ChatState> {
       sb.writeln('Subjects:');
       for (final s in subjects.take(20)) {
         final held = s.attended + s.absent;
+        final effTarget = s.effectiveTarget(target);
+        final stats = AttendanceStats(present: s.attended, absent: s.absent);
+        var guidance = '';
+        if (held > 0) {
+          if (s.percent >= effTarget) {
+            final canSkip = stats.bunkableClasses(effTarget);
+            guidance = canSkip > 0
+                ? ' — can skip $canSkip more and stay ≥ ${effTarget.toStringAsFixed(0)}%'
+                : " — right at the ${effTarget.toStringAsFixed(0)}% limit, don't skip the next one";
+          } else {
+            final need = stats.classesToRecover(effTarget);
+            guidance = need > 0
+                ? ' — below target, attend $need in a row to reach ${effTarget.toStringAsFixed(0)}%'
+                : ' — below the ${effTarget.toStringAsFixed(0)}% target';
+          }
+        }
         sb.writeln(
-            '- ${s.name}: ${held == 0 ? "no classes marked" : "${s.percent.toStringAsFixed(0)}% (${s.attended}/$held)"}${s.cancelled > 0 ? ", ${s.cancelled} cancelled" : ""}.');
+            '- ${s.name}: ${held == 0 ? "no classes marked" : "${s.percent.toStringAsFixed(0)}% (${s.attended}/$held)"}${s.cancelled > 0 ? ", ${s.cancelled} cancelled" : ""}$guidance.');
       }
     }
     // Today's classes so the assistant can answer "how many classes today?".
     final todayClasses = _ref.read(classesForDayProvider(now));
     if (todayClasses.isEmpty) {
-      sb.writeln("Today's classes: none scheduled.");
+      sb.writeln("Today's classes: none scheduled — the student is free all day.");
     } else {
       sb.writeln("Today's classes (${todayClasses.length}):");
       for (final c in todayClasses) {
@@ -161,7 +221,59 @@ class ChatController extends StateNotifier<ChatState> {
             '- ${c.subject.name} ${c.session.startTime}–${c.session.endTime}'
             '${room != null && room.isNotEmpty ? " in $room" : ""}.');
       }
+      final free = _freeGaps(todayClasses);
+      if (free != null) {
+        sb.writeln("Free gaps between today's classes: $free.");
+      }
     }
+    // Tomorrow's classes + exams so the assistant can answer "am I free
+    // tomorrow (afternoon)?" and "can I skip tomorrow's lecture?" accurately.
+    // classesForDayProvider includes one-off classes and honours course
+    // start/end windows and cancellations — not just the recurring template.
+    final tomorrow =
+        DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+    final tomorrowName = Weekdays.full[tomorrow.weekday - 1];
+    final tomorrowClasses = _ref.read(classesForDayProvider(tomorrow));
+    if (tomorrowClasses.isEmpty) {
+      sb.writeln('Tomorrow ($tomorrowName): no classes scheduled.');
+    } else {
+      sb.writeln('Tomorrow ($tomorrowName) classes (${tomorrowClasses.length}):');
+      for (final c in tomorrowClasses) {
+        final room = c.session.room;
+        sb.writeln(
+            '- ${c.subject.name} ${c.session.startTime}–${c.session.endTime}'
+            '${room != null && room.isNotEmpty ? " in $room" : ""}.');
+      }
+      final free = _freeGaps(tomorrowClasses);
+      if (free != null) {
+        sb.writeln("Free gaps between tomorrow's classes: $free.");
+      }
+    }
+    final allExams = _ref.read(examsStreamProvider).valueOrNull ?? const <Exam>[];
+    final tomorrowExams =
+        allExams.where((e) => DateUtilsX.isSameDay(e.date, tomorrow)).toList();
+    if (tomorrowExams.isNotEmpty) {
+      sb.writeln('Tomorrow exams:');
+      for (final e in tomorrowExams) {
+        final hh = e.date.hour.toString().padLeft(2, '0');
+        final mm = e.date.minute.toString().padLeft(2, '0');
+        sb.writeln('- ${e.title} at $hh:$mm.');
+      }
+    }
+    // Total classes across the current week (Mon–Sun), so "how many classes do
+    // I have this week?" is answered from real data (incl. one-off classes).
+    final weekStartMon = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: now.weekday - 1));
+    var weekClassCount = 0;
+    final perDayCounts = <String>[];
+    for (var i = 0; i < 7; i++) {
+      final d = weekStartMon.add(Duration(days: i));
+      final n = _ref.read(classesForDayProvider(d)).length;
+      weekClassCount += n;
+      if (n > 0) perDayCounts.add('${Weekdays.short[i]} $n');
+    }
+    sb.writeln(
+        'Classes this week (Mon–Sun): $weekClassCount total${perDayCounts.isNotEmpty ? " (${perDayCounts.join(', ')})" : ""}.');
     // Full weekly recurring timetable, grouped by weekday, so the assistant
     // can plan the week and reason about the schedule on any day.
     final recurring = _ref
@@ -395,12 +507,14 @@ class ChatController extends StateNotifier<ChatState> {
 
     // Feature-usage analytics (never blocks the chat).
     _ref.read(analyticsProvider).aiMessage(hasImage: image != null);
+    // Feature discovery: the AI assistant has now been tried.
+    _ref.read(featureUsageProvider.notifier).markUsed(FeatureId.aiAssistant);
 
     if (!_gemini.isConfigured) {
       _append(const ChatMessage(
         role: ChatRole.assistant,
-        text: "I need a Gemini API key to chat. Add a free one in "
-            "Settings → AI assistant, then come back. 🙂",
+        text: 'I need a Gemini API key to chat. Add a free one in '
+            'Settings → AI assistant, then come back. 🙂',
       ));
       return;
     }
@@ -412,11 +526,11 @@ class ChatController extends StateNotifier<ChatState> {
     if (!isPro) {
       final used = usageRepo == null ? 0 : await usageRepo.currentCount();
       if (used >= ProConstants.freeMonthlyChatLimit) {
-        _append(ChatMessage(
+        _append(const ChatMessage(
           role: ChatRole.assistant,
           text: "You've used all ${ProConstants.freeMonthlyChatLimit} free AI "
-              "messages this month. Upgrade to ClassTrack Pro for unlimited "
-              "chats. 💜",
+              'messages this month. Upgrade to ClassTrack Pro for unlimited '
+              'chats. 💜',
         ));
         _needsPaywall = true;
         return;
@@ -455,6 +569,7 @@ class ChatController extends StateNotifier<ChatState> {
         _ref.read(analyticsProvider).scheduleImport('chat');
       }
       final actions = GeminiService.extractActionsFromReply(reply);
+      ActionOutcome? outcome;
       if (actions.isNotEmpty) {
         // When the assistant also proposes a reviewable schedule, the user
         // confirms and commits it from the review card. Auto-executing
@@ -469,18 +584,36 @@ class ChatController extends StateNotifier<ChatState> {
                 final t = (a['type'] as String?)?.trim();
                 return t != 'subject' && t != 'class';
               }).toList();
-        if (toRun.isNotEmpty) await _executeActions(toRun);
+        if (toRun.isNotEmpty) outcome = await _executeActions(toRun);
       }
       var cleaned = GeminiService.stripScheduleBlock(reply);
       cleaned = GeminiService.stripActionsBlock(cleaned);
+      // Belt-and-braces: remove any other fenced code block or bare JSON the
+      // model echoed (e.g. a ```json duplicate of a bulk-delete list), so the
+      // chat bubble never shows raw script/JSON.
+      cleaned = GeminiService.stripAllCodeFences(cleaned);
+      cleaned = GeminiService.stripBareActionsJson(cleaned);
       final prose = _cleanMarkdown(cleaned);
+      var finalText = prose.isEmpty
+          ? (schedule != null
+              ? 'I put together a schedule below — tap to review it.'
+              : (actions.isNotEmpty ? 'Done — updated for you. ✅' : 'Okay!'))
+          : prose;
+      // Honesty guard: the model sometimes says "Done — removed all subjects"
+      // even when its action matched nothing (e.g. a "delete all" it couldn't
+      // express, or a bad title). If we ran actions but changed nothing, don't
+      // echo that false confirmation — tell the user the truth instead.
+      if (schedule == null &&
+          outcome != null &&
+          outcome.attempted > 0 &&
+          outcome.succeeded == 0) {
+        finalText =
+            "I couldn't find anything matching that in your data, so nothing "
+            'was changed. Could you tell me exactly which item you mean?';
+      }
       _append(ChatMessage(
         role: ChatRole.assistant,
-        text: prose.isEmpty
-            ? (schedule != null
-                ? 'I put together a schedule below — tap to review it.'
-                : (actions.isNotEmpty ? 'Done — updated for you. ✅' : 'Okay!'))
-            : prose,
+        text: finalText,
         schedule: schedule,
       ));
       // Count this successful message toward the free monthly limit.
@@ -499,7 +632,7 @@ class ChatController extends StateNotifier<ChatState> {
         role: ChatRole.assistant,
         text: limited
             ? "You've reached today's AI usage limit. Please try again "
-                "tomorrow. 🙏"
+                'tomorrow. 🙏'
             : 'Something went wrong reaching the assistant. Please check your '
                 'connection and try again.',
       ));
@@ -512,61 +645,65 @@ class ChatController extends StateNotifier<ChatState> {
 
   /// Runs the structured actions the assistant emitted, updating Firestore/UI
   /// silently. Failures are swallowed so a bad action never derails the chat.
-  Future<void> _executeActions(List<Map<String, dynamic>> actions) async {
+  /// Returns a tally of what actually changed so the caller can confirm truth-
+  /// fully instead of blindly echoing the model's "Done".
+  Future<ActionOutcome> _executeActions(List<Map<String, dynamic>> actions) async {
+    final outcome = ActionOutcome();
     for (final a in actions) {
       final type = a['type']?.toString().trim();
       try {
         switch (type) {
           case 'expense':
-            await _addExpense(a);
+            outcome.record(await _addExpense(a));
             break;
           case 'exam':
-            await _addExam(a);
+            outcome.record(await _addExam(a));
             break;
           case 'task':
-            await _addTask(a);
+            outcome.record(await _addTask(a));
             break;
           case 'linkNote':
-            await _linkNote(a);
+            outcome.record(await _linkNote(a));
             break;
           case 'attendance':
-            await _markAttendance(a);
+            outcome.record(await _markAttendance(a));
             break;
           case 'note':
-            await _addNote(a);
+            outcome.record(await _addNote(a));
             break;
           case 'budget':
-            await _setBudget(a);
+            outcome.record(await _setBudget(a));
             break;
           case 'subject':
-            await _addSubject(a);
+            outcome.record(await _addSubject(a));
             break;
           case 'grade':
-            await _addGrade(a);
+            outcome.record(await _addGrade(a));
             break;
           case 'class':
-            await _addClass(a);
+            outcome.record(await _addClass(a));
             break;
           case 'habit':
-            await _addHabit(a);
+            outcome.record(await _addHabit(a));
             break;
           case 'habitCheck':
-            await _checkHabit(a);
+            outcome.record(await _checkHabit(a));
             break;
           case 'study':
-            await _addStudy(a);
+            outcome.record(await _addStudy(a));
             break;
           case 'update':
-            await _updateEntity(a);
+            outcome.record(await _updateEntity(a));
             break;
           case 'delete':
-            await _deleteEntity(a);
+            outcome.recordCount(await _deleteEntity(a));
             break;
         }
       } catch (_) {
         // Invisible automation shouldn't surface stack traces to the user.
       }
     }
+    return outcome;
   }
 
   DateTime? _parseDate(String? s) {
@@ -601,9 +738,9 @@ class ChatController extends StateNotifier<ChatState> {
     return null;
   }
 
-  Future<void> _addExpense(Map<String, dynamic> a) async {
+  Future<bool> _addExpense(Map<String, dynamic> a) async {
     final amount = _toDouble(a['amount']);
-    if (amount == null || amount <= 0) return;
+    if (amount == null || amount <= 0) return false;
     final category = ExpenseCategoryX.parse(a['category'] as String?);
     final title = (a['title'] as String?)?.trim();
     await _ref.read(expenseControllerProvider).add(Expense(
@@ -613,11 +750,12 @@ class ChatController extends StateNotifier<ChatState> {
           category: category,
           date: DateTime.now(),
         ));
+    return true;
   }
 
-  Future<void> _addExam(Map<String, dynamic> a) async {
+  Future<bool> _addExam(Map<String, dynamic> a) async {
     final title = (a['title'] as String?)?.trim();
-    if (title == null || title.isEmpty) return;
+    if (title == null || title.isEmpty) return false;
     final date = _parseDate(a['date'] as String?) ?? DateTime.now();
     final time = DateUtilsX.parseTime24((a['time'] as String?) ?? '');
     final dt = DateTime(
@@ -632,11 +770,12 @@ class ChatController extends StateNotifier<ChatState> {
           room: clean(a['room'] as String?),
           note: clean(a['note'] as String?),
         ));
+    return true;
   }
 
-  Future<void> _addTask(Map<String, dynamic> a) async {
+  Future<bool> _addTask(Map<String, dynamic> a) async {
     final title = (a['title'] as String?)?.trim();
-    if (title == null || title.isEmpty) return;
+    if (title == null || title.isEmpty) return false;
     await _ref.read(taskControllerProvider).add(TaskItem(
           id: '',
           title: title,
@@ -645,13 +784,14 @@ class ChatController extends StateNotifier<ChatState> {
           type: TaskTypeX.parse(a['taskType'] as String?),
           subjectId: _findSubjectIdByName(a['subject'] as String?),
         ));
+    return true;
   }
 
-  Future<void> _linkNote(Map<String, dynamic> a) async {
+  Future<bool> _linkNote(Map<String, dynamic> a) async {
     final noteQ = (a['noteTitle'] as String?)?.toLowerCase().trim();
     final examQ = (a['examTitle'] as String?)?.toLowerCase().trim();
     if (noteQ == null || noteQ.isEmpty || examQ == null || examQ.isEmpty) {
-      return;
+      return false;
     }
     final notes = _ref.read(notesStreamProvider).valueOrNull ?? const [];
     final exams = _ref.read(examsStreamProvider).valueOrNull ?? const [];
@@ -672,32 +812,34 @@ class ChatController extends StateNotifier<ChatState> {
         break;
       }
     }
-    if (note == null || exam == null) return;
+    if (note == null || exam == null) return false;
     await _ref.read(noteControllerProvider).update(
           note.copyWith(linkedExamId: exam.id, updatedAt: DateTime.now()),
         );
+    return true;
   }
 
-  Future<void> _markAttendance(Map<String, dynamic> a) async {
+  Future<bool> _markAttendance(Map<String, dynamic> a) async {
     final subjectId = _findSubjectIdByName(a['subject'] as String?);
-    if (subjectId == null) return;
+    if (subjectId == null) return false;
     final status = switch ((a['status'] as String?)?.toLowerCase().trim()) {
       'present' => AttendanceStatus.present,
       'absent' => AttendanceStatus.absent,
       'cancelled' || 'canceled' => AttendanceStatus.cancelled,
       _ => null,
     };
-    if (status == null) return;
+    if (status == null) return false;
     final date = _parseDate(a['date'] as String?) ?? DateTime.now();
     await _ref
         .read(attendanceControllerProvider)
         .setForDate(subjectId, date, status);
+    return true;
   }
 
-  Future<void> _addNote(Map<String, dynamic> a) async {
+  Future<bool> _addNote(Map<String, dynamic> a) async {
     final title = (a['title'] as String?)?.trim() ?? '';
     final body = (a['body'] as String?)?.trim() ?? '';
-    if (title.isEmpty && body.isEmpty) return;
+    if (title.isEmpty && body.isEmpty) return false;
     await _ref.read(noteControllerProvider).add(Note(
           id: 'new',
           title: title,
@@ -705,12 +847,14 @@ class ChatController extends StateNotifier<ChatState> {
           subjectId: _findSubjectIdByName(a['subject'] as String?),
           updatedAt: DateTime.now(),
         ));
+    return true;
   }
 
-  Future<void> _setBudget(Map<String, dynamic> a) async {
+  Future<bool> _setBudget(Map<String, dynamic> a) async {
     final amount = _toDouble(a['amount']);
-    if (amount == null || amount < 0) return;
+    if (amount == null || amount < 0) return false;
     await _ref.read(expenseSettingsProvider).setBudget(amount);
+    return true;
   }
 
   // --- Generic matching + create/update/delete across all entities ----------
@@ -778,18 +922,18 @@ class ChatController extends StateNotifier<ChatState> {
       final v = int.tryParse(s, radix: 16);
       if (v != null) return v <= 0xFFFFFF ? (0xFF000000 | v) : v;
     }
-    final palette = AppColors.subjectPalette;
+    const palette = AppColors.subjectPalette;
     return palette[DateTime.now().microsecondsSinceEpoch % palette.length]
         .toARGB32();
   }
 
   String? _clean(String? v) => (v == null || v.trim().isEmpty) ? null : v.trim();
 
-  Future<void> _addSubject(Map<String, dynamic> a) async {
+  Future<bool> _addSubject(Map<String, dynamic> a) async {
     final name = (a['name'] as String?)?.trim();
-    if (name == null || name.isEmpty) return;
+    if (name == null || name.isEmpty) return false;
     final repo = _ref.read(subjectRepositoryProvider);
-    if (repo == null) return;
+    if (repo == null) return false;
     await repo.create(Subject(
       id: '',
       name: name,
@@ -798,15 +942,16 @@ class ChatController extends StateNotifier<ChatState> {
       startDate: _parseDate(a['startDate'] as String?),
       endDate: _parseDate(a['endDate'] as String?),
     ));
+    return true;
   }
 
-  Future<void> _addGrade(Map<String, dynamic> a) async {
+  Future<bool> _addGrade(Map<String, dynamic> a) async {
     final title = (a['title'] as String?)?.trim();
     final score = _toDouble(a['score']);
     final maxScore = _toDouble(a['maxScore']);
     if (title == null || title.isEmpty || score == null || maxScore == null ||
         maxScore <= 0) {
-      return;
+      return false;
     }
     await _ref.read(gradeControllerProvider).add(GradeItem(
           id: '',
@@ -817,13 +962,14 @@ class ChatController extends StateNotifier<ChatState> {
           subjectId: _findSubjectIdByName(a['subject'] as String?),
           date: DateTime.now(),
         ));
+    return true;
   }
 
-  Future<void> _addClass(Map<String, dynamic> a) async {
+  Future<bool> _addClass(Map<String, dynamic> a) async {
     final subjectId = _findSubjectIdByName(a['subject'] as String?);
-    if (subjectId == null) return;
+    if (subjectId == null) return false;
     final repo = _ref.read(sessionRepositoryProvider);
-    if (repo == null) return;
+    if (repo == null) return false;
     final day = Weekdays.parse((a['day'] as String?) ?? '');
     final start = (a['start'] as String?) ?? '09:00';
     final end =
@@ -841,45 +987,50 @@ class ChatController extends StateNotifier<ChatState> {
         room: _clean(a['room'] as String?),
       ),
     );
+    return true;
   }
 
-  Future<void> _addHabit(Map<String, dynamic> a) async {
+  Future<bool> _addHabit(Map<String, dynamic> a) async {
     final title = (a['title'] as String?)?.trim();
-    if (title == null || title.isEmpty) return;
+    if (title == null || title.isEmpty) return false;
     await _ref.read(habitControllerProvider).add(Habit(
           id: 'new',
           title: title,
           colorHex: _pickColor(a['color'] as String?),
         ));
+    return true;
   }
 
   /// Logs a focus/study session (minutes, optional subject + date).
-  Future<void> _addStudy(Map<String, dynamic> a) async {
+  Future<bool> _addStudy(Map<String, dynamic> a) async {
     final minutes = _toInt(a['minutes']);
-    if (minutes == null || minutes <= 0) return;
+    if (minutes == null || minutes <= 0) return false;
     await _ref.read(studyControllerProvider).logSession(
           minutes: minutes,
           subjectId: _findSubjectIdByName(a['subject'] as String?),
           startedAt: _parseDate(a['date'] as String?),
         );
+    return true;
   }
 
   /// Marks the matching habit done for today (idempotent — never un-checks).
-  Future<void> _checkHabit(Map<String, dynamic> a) async {    final q = (a['match'] ?? a['title'] ?? a['name']) as String?;
+  Future<bool> _checkHabit(Map<String, dynamic> a) async {
+    final q = (a['match'] ?? a['title'] ?? a['name']) as String?;
     final habits = _ref.read(habitsStreamProvider).valueOrNull ?? const [];
     final h = _match(habits, q, (x) => x.title);
-    if (h == null || h.doneToday) return;
+    if (h == null || h.doneToday) return false;
     await _ref.read(habitControllerProvider).toggleToday(h);
+    return true;
   }
 
-  Future<void> _updateEntity(Map<String, dynamic> a) async {
+  Future<bool> _updateEntity(Map<String, dynamic> a) async {
     final entity = (a['entity'] as String?)?.toLowerCase().trim();
     final q = (a['match'] ?? a['title'] ?? a['name']) as String?;
     switch (entity) {
       case 'task':
         final t = _match(_ref.read(tasksStreamProvider).valueOrNull ?? const [],
             q, (x) => x.title);
-        if (t == null) return;
+        if (t == null) return false;
         await _ref.read(taskControllerProvider).update(t.copyWith(
               title: _clean(a['newTitle'] as String?),
               note: _clean(a['note'] as String?),
@@ -892,11 +1043,11 @@ class ChatController extends StateNotifier<ChatState> {
                   : null,
               done: a['done'] as bool?,
             ));
-        break;
+        return true;
       case 'exam':
         final e = _match(_ref.read(examsStreamProvider).valueOrNull ?? const [],
             q, (x) => x.title);
-        if (e == null) return;
+        if (e == null) return false;
         DateTime? newDate;
         final d = _parseDate(a['date'] as String?);
         if (d != null) {
@@ -910,14 +1061,14 @@ class ChatController extends StateNotifier<ChatState> {
               room: _clean(a['room'] as String?),
               note: _clean(a['note'] as String?),
             ));
-        break;
+        return true;
       case 'expense':
         final ex = _matchExpense(
             _ref.read(expensesStreamProvider).valueOrNull ?? const [],
             q,
             _toDouble(a['amount']),
             a['category'] as String?);
-        if (ex == null) return;
+        if (ex == null) return false;
         await _ref.read(expenseControllerProvider).update(ex.copyWith(
               title: _clean(a['newTitle'] as String?),
               amount: _toDouble(a['newAmount']),
@@ -925,37 +1076,37 @@ class ChatController extends StateNotifier<ChatState> {
                   ? ExpenseCategoryX.parse(a['newCategory'] as String?)
                   : null,
             ));
-        break;
+        return true;
       case 'note':
         final n = _match(_ref.read(notesStreamProvider).valueOrNull ?? const [],
             q, (x) => x.title);
-        if (n == null) return;
+        if (n == null) return false;
         await _ref.read(noteControllerProvider).update(n.copyWith(
               title: _clean(a['newTitle'] as String?),
               body: _clean(a['body'] as String?),
               updatedAt: DateTime.now(),
             ));
-        break;
+        return true;
       case 'grade':
         final g = _match(
             _ref.read(gradesStreamProvider).valueOrNull ?? const [],
             q,
             (x) => x.title);
-        if (g == null) return;
+        if (g == null) return false;
         await _ref.read(gradeControllerProvider).update(g.copyWith(
               title: _clean(a['newTitle'] as String?),
               score: _toDouble(a['score']),
               maxScore: _toDouble(a['maxScore']),
               weight: _toDouble(a['weight']),
             ));
-        break;
+        return true;
       case 'subject':
         final repo = _ref.read(subjectRepositoryProvider);
         final s = _match(
             _ref.read(subjectsStreamProvider).valueOrNull ?? const [],
             q,
             (x) => x.name);
-        if (s == null || repo == null) return;
+        if (s == null || repo == null) return false;
         await repo.update(s.copyWith(
           name: _clean(a['newName'] as String?),
           colorHex: a['color'] != null ? _pickColor(a['color'] as String?) : null,
@@ -963,16 +1114,16 @@ class ChatController extends StateNotifier<ChatState> {
           startDate: _parseDate(a['startDate'] as String?),
           endDate: _parseDate(a['endDate'] as String?),
         ));
-        break;
+        return true;
       case 'class':
         final subjectId = _findSubjectIdByName(a['subject'] as String?);
         final repo = _ref.read(sessionRepositoryProvider);
-        if (subjectId == null || repo == null) return;
+        if (subjectId == null || repo == null) return false;
         final sessions =
             _ref.read(sessionsForSubjectProvider(subjectId)).valueOrNull ??
                 const [];
         final day = Weekdays.parse((a['day'] as String?) ?? '');
-        if (day == null) return; // need a specific day to pick the right class
+        if (day == null) return false; // need a specific day to pick the class
         ClassSession? target;
         for (final s in sessions) {
           if (s.dayOfWeek == day) {
@@ -980,7 +1131,7 @@ class ChatController extends StateNotifier<ChatState> {
             break;
           }
         }
-        if (target == null) return;
+        if (target == null) return false;
         final newStart = _clean(a['start'] as String?);
         final newEndRaw = _clean(a['end'] as String?);
         final newDay = Weekdays.parse((a['newDay'] as String?) ?? '');
@@ -993,99 +1144,233 @@ class ChatController extends StateNotifier<ChatState> {
           dayOfWeek: newDay,
           room: _clean(a['room'] as String?),
         ));
-        break;
+        return true;
       case 'habit':
         final h = _match(
             _ref.read(habitsStreamProvider).valueOrNull ?? const [],
             q,
             (x) => x.title);
-        if (h == null) return;
+        if (h == null) return false;
         await _ref.read(habitControllerProvider).update(h.copyWith(
               title: _clean(a['newTitle'] as String?),
               colorHex:
                   a['color'] != null ? _pickColor(a['color'] as String?) : null,
             ));
-        break;
+        return true;
     }
+    return false;
   }
 
-  Future<void> _deleteEntity(Map<String, dynamic> a) async {
+  /// Deletes the matching item(s) and returns how many were removed. When the
+  /// action carries "all": true it clears EVERY item of that entity (used for
+  /// "delete all my subjects", "clear my tasks", etc.), with a single Undo that
+  /// restores the whole batch.
+  Future<int> _deleteEntity(Map<String, dynamic> a) async {
     final entity = (a['entity'] as String?)?.toLowerCase().trim();
+    final all = a['all'] == true ||
+        a['all']?.toString().toLowerCase().trim() == 'true';
     final q = (a['match'] ?? a['title'] ?? a['name']) as String?;
     switch (entity) {
       case 'task':
-        final t = _match(_ref.read(tasksStreamProvider).valueOrNull ?? const [],
-            q, (x) => x.title);
-        if (t != null) {
-          await _ref.read(taskControllerProvider).delete(t.id);
-          _pendingUndo = PendingUndo('Deleted "${t.title}"',
-              () => _ref.read(taskControllerProvider).add(t));
+        final items = _ref.read(tasksStreamProvider).valueOrNull ?? const [];
+        final ctrl = _ref.read(taskControllerProvider);
+        if (all) {
+          for (final t in items) {
+            await ctrl.delete(t.id);
+          }
+          if (items.isNotEmpty) {
+            _pendingUndo = PendingUndo('Deleted ${items.length} tasks',
+                () async {
+              for (final t in items) {
+                await ctrl.add(t);
+              }
+            });
+          }
+          return items.length;
         }
-        break;
+        final t = _match(items, q, (x) => x.title);
+        if (t == null) return 0;
+        await ctrl.delete(t.id);
+        _pendingUndo = PendingUndo('Deleted "${t.title}"', () => ctrl.add(t));
+        return 1;
       case 'exam':
-        final e = _match(_ref.read(examsStreamProvider).valueOrNull ?? const [],
-            q, (x) => x.title);
-        if (e != null) {
-          await _ref.read(examControllerProvider).delete(e.id);
-          _pendingUndo = PendingUndo('Deleted "${e.title}"',
-              () => _ref.read(examControllerProvider).add(e));
+        final items = _ref.read(examsStreamProvider).valueOrNull ?? const [];
+        final ctrl = _ref.read(examControllerProvider);
+        if (all) {
+          for (final e in items) {
+            await ctrl.delete(e.id);
+          }
+          if (items.isNotEmpty) {
+            _pendingUndo = PendingUndo('Deleted ${items.length} exams',
+                () async {
+              for (final e in items) {
+                await ctrl.add(e);
+              }
+            });
+          }
+          return items.length;
         }
-        break;
+        final e = _match(items, q, (x) => x.title);
+        if (e == null) return 0;
+        await ctrl.delete(e.id);
+        _pendingUndo = PendingUndo('Deleted "${e.title}"', () => ctrl.add(e));
+        return 1;
       case 'expense':
+        final items = _ref.read(expensesStreamProvider).valueOrNull ?? const [];
+        final ctrl = _ref.read(expenseControllerProvider);
+        if (all) {
+          for (final ex in items) {
+            await ctrl.delete(ex.id);
+          }
+          if (items.isNotEmpty) {
+            _pendingUndo = PendingUndo('Deleted ${items.length} expenses',
+                () async {
+              for (final ex in items) {
+                await ctrl.add(ex);
+              }
+            });
+          }
+          return items.length;
+        }
         final ex = _matchExpense(
-            _ref.read(expensesStreamProvider).valueOrNull ?? const [],
-            q,
-            _toDouble(a['amount']),
-            a['category'] as String?);
-        if (ex != null) {
-          await _ref.read(expenseControllerProvider).delete(ex.id);
-          _pendingUndo = PendingUndo(
-              'Deleted "${ex.title.isEmpty ? ex.category.label : ex.title}"',
-              () => _ref.read(expenseControllerProvider).add(ex));
-        }
-        break;
+            items, q, _toDouble(a['amount']), a['category'] as String?);
+        if (ex == null) return 0;
+        await ctrl.delete(ex.id);
+        _pendingUndo = PendingUndo(
+            'Deleted "${ex.title.isEmpty ? ex.category.label : ex.title}"',
+            () => ctrl.add(ex));
+        return 1;
       case 'note':
-        final n = _match(_ref.read(notesStreamProvider).valueOrNull ?? const [],
-            q, (x) => x.title);
-        if (n != null) {
-          await _ref.read(noteControllerProvider).delete(n.id);
-          _pendingUndo = PendingUndo(
-              'Deleted note "${n.title.isEmpty ? 'Untitled' : n.title}"',
-              () => _ref.read(noteControllerProvider).add(n));
+        final items = _ref.read(notesStreamProvider).valueOrNull ?? const [];
+        final ctrl = _ref.read(noteControllerProvider);
+        if (all) {
+          for (final n in items) {
+            await ctrl.delete(n.id);
+          }
+          if (items.isNotEmpty) {
+            _pendingUndo = PendingUndo('Deleted ${items.length} notes',
+                () async {
+              for (final n in items) {
+                await ctrl.add(n);
+              }
+            });
+          }
+          return items.length;
         }
-        break;
+        final n = _match(items, q, (x) => x.title);
+        if (n == null) return 0;
+        await ctrl.delete(n.id);
+        _pendingUndo = PendingUndo(
+            'Deleted note "${n.title.isEmpty ? 'Untitled' : n.title}"',
+            () => ctrl.add(n));
+        return 1;
       case 'grade':
-        final g = _match(
-            _ref.read(gradesStreamProvider).valueOrNull ?? const [],
-            q,
-            (x) => x.title);
-        if (g != null) {
-          await _ref.read(gradeControllerProvider).delete(g.id);
-          _pendingUndo = PendingUndo('Deleted "${g.title}"',
-              () => _ref.read(gradeControllerProvider).add(g));
+        final items = _ref.read(gradesStreamProvider).valueOrNull ?? const [];
+        final ctrl = _ref.read(gradeControllerProvider);
+        if (all) {
+          for (final g in items) {
+            await ctrl.delete(g.id);
+          }
+          if (items.isNotEmpty) {
+            _pendingUndo = PendingUndo('Deleted ${items.length} grades',
+                () async {
+              for (final g in items) {
+                await ctrl.add(g);
+              }
+            });
+          }
+          return items.length;
         }
-        break;
+        final g = _match(items, q, (x) => x.title);
+        if (g == null) return 0;
+        await ctrl.delete(g.id);
+        _pendingUndo = PendingUndo('Deleted "${g.title}"', () => ctrl.add(g));
+        return 1;
       case 'subject':
         final repo = _ref.read(subjectRepositoryProvider);
-        final s = _match(
-            _ref.read(subjectsStreamProvider).valueOrNull ?? const [],
-            q,
-            (x) => x.name);
-        if (s != null && repo != null) {
-          await repo.delete(s.id);
-          _pendingUndo = PendingUndo(
-              'Deleted "${s.name}"', () => repo.create(s));
+        if (repo == null) return 0;
+        final items =
+            _ref.read(subjectsStreamProvider).valueOrNull ?? const [];
+        if (all) {
+          for (final s in items) {
+            await repo.delete(s.id);
+          }
+          if (items.isNotEmpty) {
+            _pendingUndo = PendingUndo('Deleted ${items.length} subjects',
+                () async {
+              for (final s in items) {
+                await repo.create(s);
+              }
+            });
+          }
+          return items.length;
         }
-        break;
+        final s = _match(items, q, (x) => x.name);
+        if (s == null) return 0;
+        await repo.delete(s.id);
+        _pendingUndo = PendingUndo('Deleted "${s.name}"', () => repo.create(s));
+        return 1;
+      case 'habit':
+        final items = _ref.read(habitsStreamProvider).valueOrNull ?? const [];
+        final ctrl = _ref.read(habitControllerProvider);
+        if (all) {
+          for (final h in items) {
+            await ctrl.delete(h.id);
+          }
+          if (items.isNotEmpty) {
+            _pendingUndo = PendingUndo('Deleted ${items.length} habits',
+                () async {
+              for (final h in items) {
+                await ctrl.add(h);
+              }
+            });
+          }
+          return items.length;
+        }
+        final h = _match(items, q, (x) => x.title);
+        if (h == null) return 0;
+        await ctrl.delete(h.id);
+        _pendingUndo = PendingUndo('Deleted "${h.title}"', () => ctrl.add(h));
+        return 1;
       case 'class':
-        final subjectId = _findSubjectIdByName(a['subject'] as String?);
         final repo = _ref.read(sessionRepositoryProvider);
-        if (subjectId == null || repo == null) return;
+        if (repo == null) return 0;
+        final subjectId = _findSubjectIdByName(a['subject'] as String?);
+        if (all) {
+          // Clear every class for the named subject, or across all subjects
+          // when none was given.
+          final subjectIds = subjectId != null
+              ? <String>[subjectId]
+              : (_ref.read(subjectsStreamProvider).valueOrNull ?? const [])
+                  .map((s) => s.id)
+                  .toList();
+          var count = 0;
+          final restores = <Future<void> Function()>[];
+          for (final sid in subjectIds) {
+            final sessions =
+                _ref.read(sessionsForSubjectProvider(sid)).valueOrNull ??
+                    const [];
+            for (final s in sessions) {
+              await repo.delete(sid, s.id);
+              restores.add(() => repo.add(sid, s));
+              count++;
+            }
+          }
+          if (count > 0) {
+            _pendingUndo = PendingUndo('Deleted $count classes', () async {
+              for (final r in restores) {
+                await r();
+              }
+            });
+          }
+          return count;
+        }
+        if (subjectId == null) return 0;
         final sessions =
             _ref.read(sessionsForSubjectProvider(subjectId)).valueOrNull ??
                 const [];
         final day = Weekdays.parse((a['day'] as String?) ?? '');
-        if (day == null) return; // need a specific day to pick the right class
+        if (day == null) return 0; // need a specific day to pick the right class
         ClassSession? target;
         for (final s in sessions) {
           if (s.dayOfWeek == day) {
@@ -1093,25 +1378,14 @@ class ChatController extends StateNotifier<ChatState> {
             break;
           }
         }
-        if (target != null) {
-          final t = target;
-          await repo.delete(subjectId, t.id);
-          _pendingUndo = PendingUndo(
-              'Deleted a class', () => repo.add(subjectId, t));
-        }
-        break;
-      case 'habit':
-        final h = _match(
-            _ref.read(habitsStreamProvider).valueOrNull ?? const [],
-            q,
-            (x) => x.title);
-        if (h != null) {
-          await _ref.read(habitControllerProvider).delete(h.id);
-          _pendingUndo = PendingUndo('Deleted "${h.title}"',
-              () => _ref.read(habitControllerProvider).add(h));
-        }
-        break;
+        if (target == null) return 0;
+        final t = target;
+        await repo.delete(subjectId, t.id);
+        _pendingUndo =
+            PendingUndo('Deleted a class', () => repo.add(subjectId, t));
+        return 1;
     }
+    return 0;
   }
 
   /// Persists the current conversation to Firestore so it appears in history.

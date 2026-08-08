@@ -10,6 +10,7 @@ import 'app.dart';
 import 'core/providers/app_settings_provider.dart';
 import 'features/subscription/data/subscription_service.dart';
 import 'features/subscription/presentation/providers/subscription_providers.dart';
+import 'features/tips/presentation/providers/tips_providers.dart';
 import 'firebase_options.dart';
 import 'services/notification_service.dart';
 import 'services/push_messaging_service.dart';
@@ -30,6 +31,9 @@ Future<void> main() async {
 
   // Local, fast — needed to build the settings providers.
   final prefs = await SharedPreferences.getInstance();
+
+  // Anchor the Tips & Tricks 7-day gate on the very first launch (device-wide).
+  await recordFirstLaunchIfNeeded(prefs);
 
   // Build the service singletons synchronously (constructors do no I/O). Their
   // async initialisers touch the network — FCM getToken()/subscribeToTopic()

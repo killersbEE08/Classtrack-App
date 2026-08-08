@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/models/checklist_item.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../core/utils/validators.dart';
 
 enum TaskPriority { low, medium, high }
 
@@ -25,33 +26,39 @@ extension TaskPriorityX on TaskPriority {
       );
 }
 
-/// The kind of item: a plain task/assignment, an online course, or a video
-/// (e.g. a YouTube tutorial the student wants to watch on a given day).
-enum TaskType { task, course, video }
+/// The kind of item: a plain task/assignment, a calendar event (e.g. a class,
+/// meeting or webinar imported from Google Calendar), or a video (e.g. a
+/// YouTube tutorial the student wants to watch on a given day).
+enum TaskType { task, event, video }
 
 extension TaskTypeX on TaskType {
   String get label => switch (this) {
         TaskType.task => 'Task',
-        TaskType.course => 'Course',
+        TaskType.event => 'Event',
         TaskType.video => 'Video',
       };
 
   IconData get icon => switch (this) {
         TaskType.task => Icons.check_circle_outline_rounded,
-        TaskType.course => Icons.school_rounded,
+        TaskType.event => Icons.event_rounded,
         TaskType.video => Icons.play_circle_fill_rounded,
       };
 
   Color get color => switch (this) {
         TaskType.task => AppColors.primary,
-        TaskType.course => AppColors.info,
+        TaskType.event => AppColors.info,
         TaskType.video => AppColors.coral,
       };
 
-  static TaskType parse(String? v) => TaskType.values.firstWhere(
-        (e) => e.name == v,
-        orElse: () => TaskType.task,
-      );
+  /// Parses the stored enum name. Accepts the legacy `"course"` value so items
+  /// created before the Course → Event rename keep working.
+  static TaskType parse(String? v) {
+    if (v == 'course') return TaskType.event; // backward compatibility
+    return TaskType.values.firstWhere(
+      (e) => e.name == v,
+      orElse: () => TaskType.task,
+    );
+  }
 }
 
 /// A task / assignment / deadline / course / video. Stored at
@@ -66,8 +73,15 @@ class TaskItem {
   final TaskPriority priority;
   final TaskType type;
   final String? link; // optional external URL (course / video / resource)
+  final String? thumbnail; // optional preview image URL (e.g. video thumbnail)
   final List<ChecklistItem> subtasks;
   final DateTime? createdAt;
+
+  /// Stable id of the external source this item was imported from (e.g. a
+  /// Google Calendar event's iCalUID/id). Lets re-imports recognise an item
+  /// they already created and skip it instead of adding a duplicate. Null for
+  /// items created by hand.
+  final String? sourceId;
 
   const TaskItem({
     required this.id,
@@ -79,8 +93,10 @@ class TaskItem {
     this.priority = TaskPriority.medium,
     this.type = TaskType.task,
     this.link,
+    this.thumbnail,
     this.subtasks = const [],
     this.createdAt,
+    this.sourceId,
   });
 
   bool get isOverdue =>
@@ -103,7 +119,9 @@ class TaskItem {
     TaskPriority? priority,
     TaskType? type,
     String? link,
+    String? thumbnail,
     List<ChecklistItem>? subtasks,
+    String? sourceId,
     bool clearDue = false,
     bool clearSubject = false,
     bool clearLink = false,
@@ -118,21 +136,27 @@ class TaskItem {
       priority: priority ?? this.priority,
       type: type ?? this.type,
       link: clearLink ? null : (link ?? this.link),
+      thumbnail: clearLink ? null : (thumbnail ?? this.thumbnail),
       subtasks: subtasks ?? this.subtasks,
       createdAt: createdAt,
+      sourceId: sourceId ?? this.sourceId,
     );
   }
 
   Map<String, dynamic> toMap() => {
-        'title': title,
-        'note': note,
+        'title': Validators.sanitizeText(title, maxLength: 200),
+        'note': note == null
+            ? null
+            : Validators.sanitizeText(note, multiline: true),
         'subjectId': subjectId,
         'dueDate': dueDate != null ? Timestamp.fromDate(dueDate!) : null,
         'done': done,
         'priority': priority.name,
         'type': type.name,
         'link': link,
+        'thumbnail': thumbnail,
         'subtasks': ChecklistItem.listToMap(subtasks),
+        'sourceId': sourceId,
         'createdAt': createdAt != null
             ? Timestamp.fromDate(createdAt!)
             : FieldValue.serverTimestamp(),
@@ -141,16 +165,21 @@ class TaskItem {
   factory TaskItem.fromMap(String id, Map<String, dynamic> map) {
     return TaskItem(
       id: id,
-      title: (map['title'] as String?) ?? '',
-      note: map['note'] as String?,
+      title: Validators.sanitizeText((map['title'] as String?) ?? '',
+          maxLength: 200),
+      note: map['note'] == null
+          ? null
+          : Validators.sanitizeText(map['note'] as String, multiline: true),
       subjectId: map['subjectId'] as String?,
       dueDate: (map['dueDate'] as Timestamp?)?.toDate(),
       done: (map['done'] as bool?) ?? false,
       priority: TaskPriorityX.parse(map['priority'] as String?),
       type: TaskTypeX.parse(map['type'] as String?),
       link: map['link'] as String?,
+      thumbnail: map['thumbnail'] as String?,
       subtasks: ChecklistItem.listFrom(map['subtasks']),
       createdAt: (map['createdAt'] as Timestamp?)?.toDate(),
+      sourceId: map['sourceId'] as String?,
     );
   }
 }

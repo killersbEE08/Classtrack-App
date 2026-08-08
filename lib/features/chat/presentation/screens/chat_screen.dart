@@ -27,10 +27,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Uint8List? _pendingImage;
 
   static const _suggestions = [
-    'Give me study tips for exams',
-    'How can I improve my attendance?',
-    'Plan my week around my classes',
-    'Mon & Wed 9–10 Maths, Tue 11–12 DBMS',
+    'Am I free tomorrow afternoon?',
+    'When is my next exam?',
+    'How many classes do I have this week?',
+    'What should I study today?',
+    "Can I skip tomorrow's lecture?",
   ];
 
   @override
@@ -521,7 +522,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       margin: const EdgeInsets.only(top: 10),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.primary.withOpacity(0.10),
+        color: AppColors.primary.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
@@ -636,7 +637,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: AppColors.primary.withOpacity(0.35),
+                    color: AppColors.primary.withValues(alpha: 0.35),
                     blurRadius: 12,
                     offset: const Offset(0, 5),
                   ),
@@ -700,7 +701,7 @@ class _TypingBubble extends StatelessWidget {
                 height: 7,
                 margin: const EdgeInsets.symmetric(horizontal: 2.5),
                 decoration: BoxDecoration(
-                  color: AppColors.primary.withOpacity(0.5),
+                  color: AppColors.primary.withValues(alpha: 0.5),
                   shape: BoxShape.circle,
                 ),
               )

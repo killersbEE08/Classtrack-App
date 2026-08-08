@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_colors.dart';
+import '../../../core/utils/validators.dart';
 
 enum ExpenseCategory { food, transport, books, rent, fun, health, other }
 
@@ -77,7 +78,7 @@ class Expense {
   }
 
   Map<String, dynamic> toMap() => {
-        'title': title,
+        'title': Validators.sanitizeText(title, maxLength: 200),
         'amount': amount,
         'category': category.name,
         'date': Timestamp.fromDate(date),
@@ -89,7 +90,8 @@ class Expense {
   factory Expense.fromMap(String id, Map<String, dynamic> map) {
     return Expense(
       id: id,
-      title: (map['title'] as String?) ?? '',
+      title: Validators.sanitizeText((map['title'] as String?) ?? '',
+          maxLength: 200),
       amount: (map['amount'] as num?)?.toDouble() ?? 0,
       category: ExpenseCategoryX.parse(map['category'] as String?),
       date: (map['date'] as Timestamp?)?.toDate() ?? DateTime.now(),

@@ -455,12 +455,12 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
                       border: Border.all(
                         color: selected
                             ? theme.colorScheme.onSurface
-                            : Colors.black.withOpacity(0.18),
+                            : Colors.black.withValues(alpha: 0.18),
                         width: selected ? 3 : 1.5,
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withOpacity(0.10),
+                          color: Colors.black.withValues(alpha: 0.10),
                           blurRadius: 3,
                           offset: const Offset(0, 1),
                         ),

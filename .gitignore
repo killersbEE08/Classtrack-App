@@ -21,6 +21,9 @@ Thumbs.db
 
 # Firebase / secrets — DO NOT COMMIT
 google-services.json
+google-services.json.*
+*.json.bak
+*.json.bak2
 GoogleService-Info.plist
 lib/firebase_options.dart
 functions/.env

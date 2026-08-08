@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'app_colors.dart';
 import 'app_typography.dart';
 
@@ -78,6 +79,9 @@ class AppTheme {
       scaffoldBackgroundColor: scaffoldBg,
       textTheme: textTheme,
       splashFactory: InkSparkle.splashFactory,
+      // Platform-adaptive spacing/hit-targets so controls feel native on both
+      // compact Android phones and iOS.
+      visualDensity: VisualDensity.adaptivePlatformDensity,
       // NOTE: ZoomPageTransitionsBuilder snapshots each route with an
       // ImageFilter during navigation. On some devices (notably Android 14+/16)
       // that snapshotting throws a cascade of "RenderBox was not laid out"
@@ -97,6 +101,13 @@ class AppTheme {
         centerTitle: false,
         foregroundColor: textPrimary,
         titleTextStyle: textTheme.titleLarge,
+        // Keep the status-bar icons legible against the scaffold background
+        // (dark icons on the light theme, light icons on the dark theme).
+        systemOverlayStyle: brightness == Brightness.light
+            ? SystemUiOverlayStyle.dark
+                .copyWith(statusBarColor: Colors.transparent)
+            : SystemUiOverlayStyle.light
+                .copyWith(statusBarColor: Colors.transparent),
       ),
       cardTheme: CardThemeData(
         color: surface,
@@ -201,6 +212,7 @@ class AppTheme {
         behavior: SnackBarBehavior.floating,
         backgroundColor: AppColors.ink,
         contentTextStyle: textTheme.bodyMedium?.copyWith(color: Colors.white),
+        actionTextColor: AppColors.primaryLight,
         shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
@@ -208,6 +220,45 @@ class AppTheme {
         backgroundColor: scheme.primary,
         foregroundColor: scheme.onPrimary,
         elevation: 0,
+      ),
+      // Brand-consistent selection/cursor, spinners, tooltips and toggles so
+      // every screen inherits the same look without per-widget styling.
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: scheme.primary,
+        selectionColor: scheme.primary.withValues(alpha: 0.24),
+        selectionHandleColor: scheme.primary,
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: scheme.primary,
+        linearTrackColor: surfaceAlt,
+        circularTrackColor: surfaceAlt,
+      ),
+      tooltipTheme: TooltipThemeData(
+        decoration: BoxDecoration(
+          color: AppColors.ink,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        textStyle: textTheme.labelMedium?.copyWith(color: Colors.white),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        waitDuration: const Duration(milliseconds: 400),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected) ? scheme.primary : null),
+        trackColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected)
+                ? scheme.primary.withValues(alpha: 0.45)
+                : null),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        fillColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected) ? scheme.primary : null),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+        side: BorderSide(color: border, width: 1.6),
+      ),
+      radioTheme: RadioThemeData(
+        fillColor: WidgetStateProperty.resolveWith((states) =>
+            states.contains(WidgetState.selected) ? scheme.primary : border),
       ),
     );
   }

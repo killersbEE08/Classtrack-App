@@ -134,6 +134,47 @@ class AttendanceRecord {
   }
 }
 
+/// Collapses duplicate / superseded attendance records so a single real class
+/// occurrence is never counted (or shown) more than once.
+///
+/// Two kinds of accidental duplicates are removed:
+///  1. Exact duplicates for the same day + slot (keeps the most recently
+///     marked one).
+///  2. A legacy subject-level record (empty [slot], doc id == dateId) for a day
+///     that ALSO has one or more specific per-session records — the specific
+///     marks supersede the old whole-day one.
+///
+/// A subject that genuinely meets more than once on the same day keeps each of
+/// its distinct per-session (slotted) records, so real double-classes still
+/// count twice. Pure and order-independent so it can be unit-tested.
+List<AttendanceRecord> dedupeAttendanceRecords(
+  List<AttendanceRecord> records,
+) {
+  // Which days have at least one specific (slotted) record?
+  final daysWithSlot = <String>{
+    for (final r in records)
+      if (r.slot.isNotEmpty) r.dateId,
+  };
+
+  // Keep the latest record per (dateId, slot).
+  final best = <String, AttendanceRecord>{};
+  for (final r in records) {
+    // Drop a legacy whole-day mark when specific sessions exist for that day.
+    if (r.slot.isEmpty && daysWithSlot.contains(r.dateId)) continue;
+    final key = '${r.dateId}__${r.slot}';
+    final existing = best[key];
+    if (existing == null) {
+      best[key] = r;
+      continue;
+    }
+    final a = r.markedAt;
+    final b = existing.markedAt;
+    // Prefer the more recently marked record; fall back to keeping existing.
+    if (a != null && (b == null || a.isAfter(b))) best[key] = r;
+  }
+  return best.values.toList();
+}
+
 /// Aggregate attendance stats for a subject (or overall).
 class AttendanceStats {
   final int present;

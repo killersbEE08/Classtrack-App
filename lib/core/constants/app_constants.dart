@@ -19,6 +19,11 @@ class AppConstants {
   static const String googleCalendarScope =
       'https://www.googleapis.com/auth/calendar.readonly';
 
+  /// OAuth scope requested to import the user's Google Tasks (to-dos).
+  /// Read-only: ClassTrack only ever reads tasks, never writes.
+  static const String googleTasksScope =
+      'https://www.googleapis.com/auth/tasks.readonly';
+
   // Defaults
   static const double defaultTargetAttendance = 75.0;
 
@@ -42,6 +47,19 @@ class AppConstants {
 
   // SharedPreferences keys
   static const String prefsOnboardingDone = 'onboarding_done';
+  static const String prefsHomeTourDone = 'home_tour_done';
+  // One-time feature-discovery tips (💡). Stored device-global, same as the
+  // home tour: they teach the app's UI, so they surface once per install.
+  static const String prefsTipNotes = 'tip_seen_notes';
+  static const String prefsTipTasks = 'tip_seen_tasks';
+  static const String prefsTipCalendar = 'tip_seen_calendar';
+  // Tips & Tricks feature-discovery page. Device-global.
+  //  • first-launch timestamp (millis since epoch) — drives the 7-day gate;
+  //  • the set of flag-tracked features the user has tried (StringList);
+  //  • whether the once-only "you're using X% of ClassTrack" prompt has shown.
+  static const String prefsFirstLaunchAt = 'first_launch_at';
+  static const String prefsFeaturesUsed = 'features_used';
+  static const String prefsTipsPromptShown = 'tips_prompt_shown';
   static const String prefsThemeMode = 'theme_mode';
   static const String prefsGeminiKey = 'gemini_api_key';
   static const String prefsReminderLead = 'reminder_lead_minutes';
@@ -56,6 +74,8 @@ class AppConstants {
   static const String prefsNotifyTasks = 'notify_tasks';
   static const String prefsNotifyExams = 'notify_exams';
   static const String prefsNotifyHabits = 'notify_habits';
+  // After-class nudge to mark attendance (Present/Absent from the notification).
+  static const String prefsNotifyAttendanceCheck = 'notify_attendance_check';
   static const String prefsDailySummary = 'notify_daily_summary';
   static const String prefsDailySummaryHour = 'notify_daily_summary_hour';
   static const String prefsDailySummaryMinute = 'notify_daily_summary_minute';

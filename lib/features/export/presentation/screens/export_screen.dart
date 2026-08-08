@@ -152,7 +152,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: AppColors.primary.withOpacity(0.1),
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.1),
                   child: Icon(icon, color: AppColors.primary),
                 ),
                 const SizedBox(width: 14),

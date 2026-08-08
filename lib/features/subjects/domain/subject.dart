@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/utils/validators.dart';
+
 /// A named external resource attached to a subject (book, drive link, etc.).
 class ResourceLink {
   final String title;
@@ -151,9 +153,11 @@ class Subject {
   }
 
   Map<String, dynamic> toMap() => {
-        'name': name,
+        'name': Validators.sanitizeText(name, maxLength: 120),
         'colorHex': colorHex,
-        'professor': professor,
+        'professor': professor == null
+            ? null
+            : Validators.sanitizeText(professor, maxLength: 120),
         'credits': credits,
         'classLink': classLink,
         'resourceLinks': resourceLinks.map((e) => e.toMap()).toList(),
@@ -180,9 +184,12 @@ class Subject {
             .clamp(0, 100000);
     return Subject(
       id: id,
-      name: (map['name'] as String?) ?? 'Untitled',
+      name: Validators.sanitizeText((map['name'] as String?) ?? 'Untitled',
+          maxLength: 120),
       colorHex: (map['colorHex'] as num?)?.toInt() ?? 0xFF6366F1,
-      professor: map['professor'] as String?,
+      professor: map['professor'] == null
+          ? null
+          : Validators.sanitizeText(map['professor'] as String, maxLength: 120),
       credits: (map['credits'] as num?)?.toInt(),
       classLink: map['classLink'] as String?,
       resourceLinks: ((map['resourceLinks'] as List<dynamic>?) ?? [])

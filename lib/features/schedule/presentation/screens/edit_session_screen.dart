@@ -206,7 +206,7 @@ class _EditSessionScreenState extends ConsumerState<EditSessionScreen> {
         padding: const EdgeInsets.all(20),
         children: [
           DropdownButtonFormField<String>(
-            value: _subjectId,
+            initialValue: _subjectId,
             isExpanded: true,
             decoration: const InputDecoration(
               labelText: 'Subject',

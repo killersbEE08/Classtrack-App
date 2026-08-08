@@ -45,9 +45,9 @@ class TaskController {
   final NotificationService _notifications;
   TaskController(this._repo, this._notifications);
 
-  Future<void> add(TaskItem t) async => _repo == null ? null : _repo.add(t);
+  Future<void> add(TaskItem t) async => _repo?.add(t);
   Future<void> update(TaskItem t) async =>
-      _repo == null ? null : _repo.update(t);
+      _repo?.update(t);
 
   Future<void> toggle(TaskItem t) async {
     if (_repo == null) return;

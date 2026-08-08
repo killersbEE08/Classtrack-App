@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:classtrack/core/theme/app_icons.dart';
 
 import '../../../../core/providers/app_settings_provider.dart';
 import '../../../../core/theme/app_colors.dart';
@@ -26,23 +25,29 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   int _index = 0;
 
   late final List<_Page> _pages = [
-    _Page(
-      PhosphorIcons.chartPieSlice(PhosphorIconsStyle.duotone),
-      'Track every class',
-      'Mark present, absent or cancelled in a tap and watch your live attendance % per subject.',
+    const _Page(
+      Icons.waving_hand_rounded,
+      'Welcome to ClassTrack',
+      'Manage your academic life in one place — classes, attendance, tasks, exams and more.',
       AppColors.primary,
     ),
-    _Page(
-      PhosphorIcons.calendarCheck(PhosphorIconsStyle.duotone),
-      'Your timetable, everywhere',
-      'Build a weekly schedule, view it as a day list, week grid or month calendar, and export to Google/Apple Calendar.',
+    const _Page(
+      Icons.auto_awesome_rounded,
+      'AI Assistant',
+      'Ask things like “When am I free tomorrow?” and get instant, personalised answers.',
       AppColors.info,
     ),
-    _Page(
-      PhosphorIcons.sparkle(PhosphorIconsStyle.duotone),
-      'Import with AI',
-      'Snap a photo of your timetable and let AI turn it into subjects and classes — you review before anything is saved.',
+    const _Page(
+      Icons.smart_display_rounded,
+      'Save Videos Instantly',
+      'Share any YouTube video directly to ClassTrack to create a study task in seconds.',
       AppColors.coral,
+    ),
+    const _Page(
+      Icons.event_available_rounded,
+      'Google Calendar',
+      'Import your existing schedule in one tap and keep everything in sync.',
+      AppColors.success,
     ),
   ];
 
@@ -235,7 +240,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         key: ValueKey(isLast),
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Text(isLast ? 'Get started' : 'Next',
+                          Text(isLast ? 'Let’s Go' : 'Next',
                               style: const TextStyle(
                                   fontWeight: FontWeight.w700, fontSize: 16)),
                           const SizedBox(width: 8),

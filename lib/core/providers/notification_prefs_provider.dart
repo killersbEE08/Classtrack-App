@@ -15,6 +15,10 @@ class NotificationPrefs {
   final bool exams;
   final bool habits;
 
+  /// After each class ends, nudge the student to mark attendance (with
+  /// Present/Absent actions right on the notification).
+  final bool attendanceCheckIns;
+
   /// A single morning notification summarising today's classes/tasks/exams.
   final bool dailySummary;
   final int summaryHour;
@@ -30,6 +34,7 @@ class NotificationPrefs {
     this.tasks = true,
     this.exams = true,
     this.habits = true,
+    this.attendanceCheckIns = true,
     this.dailySummary = false,
     this.summaryHour = 7,
     this.summaryMinute = 30,
@@ -57,6 +62,7 @@ class NotificationPrefs {
     bool? tasks,
     bool? exams,
     bool? habits,
+    bool? attendanceCheckIns,
     bool? dailySummary,
     int? summaryHour,
     int? summaryMinute,
@@ -69,6 +75,7 @@ class NotificationPrefs {
       tasks: tasks ?? this.tasks,
       exams: exams ?? this.exams,
       habits: habits ?? this.habits,
+      attendanceCheckIns: attendanceCheckIns ?? this.attendanceCheckIns,
       dailySummary: dailySummary ?? this.dailySummary,
       summaryHour: summaryHour ?? this.summaryHour,
       summaryMinute: summaryMinute ?? this.summaryMinute,
@@ -88,6 +95,8 @@ class NotificationPrefsController extends StateNotifier<NotificationPrefs> {
         tasks: p.getBool(AppConstants.prefsNotifyTasks) ?? true,
         exams: p.getBool(AppConstants.prefsNotifyExams) ?? true,
         habits: p.getBool(AppConstants.prefsNotifyHabits) ?? true,
+        attendanceCheckIns:
+            p.getBool(AppConstants.prefsNotifyAttendanceCheck) ?? true,
         dailySummary: p.getBool(AppConstants.prefsDailySummary) ?? false,
         summaryHour: p.getInt(AppConstants.prefsDailySummaryHour) ?? 7,
         summaryMinute: p.getInt(AppConstants.prefsDailySummaryMinute) ?? 30,
@@ -101,9 +110,14 @@ class NotificationPrefsController extends StateNotifier<NotificationPrefs> {
     bool? tasks,
     bool? exams,
     bool? habits,
+    bool? attendanceCheckIns,
   }) async {
     state = state.copyWith(
-        classes: classes, tasks: tasks, exams: exams, habits: habits);
+        classes: classes,
+        tasks: tasks,
+        exams: exams,
+        habits: habits,
+        attendanceCheckIns: attendanceCheckIns);
     if (classes != null) {
       await _prefs.setBool(AppConstants.prefsNotifyClasses, classes);
     }
@@ -115,6 +129,10 @@ class NotificationPrefsController extends StateNotifier<NotificationPrefs> {
     }
     if (habits != null) {
       await _prefs.setBool(AppConstants.prefsNotifyHabits, habits);
+    }
+    if (attendanceCheckIns != null) {
+      await _prefs.setBool(
+          AppConstants.prefsNotifyAttendanceCheck, attendanceCheckIns);
     }
   }
 

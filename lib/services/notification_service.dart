@@ -31,6 +31,12 @@ class NotificationService {
   /// created in order to cancel them precisely on prune/delete/reschedule.
   final Map<String, Set<int>> _classReminderIds = {};
 
+  /// Subject ids we currently have after-class attendance check-ins scheduled
+  /// for, and the concrete notification ids per subject — mirrors the class
+  /// reminder tracking so check-ins are pruned/cancelled precisely.
+  final Set<String> _scheduledCheckSubjects = {};
+  final Map<String, Set<int>> _checkInIds = {};
+
   /// Android delivery mode. Defaults to inexact (never throws, always allowed);
   /// upgraded to exact-while-idle once we confirm the OS permits exact alarms,
   /// so time-sensitive reminders (class start, 7:30 daily summary) fire on time
@@ -54,6 +60,35 @@ class NotificationService {
   /// deep-link to the schedule/today view so the student can mark attendance —
   /// which is exactly what the notification body invites them to do.
   static const String classReminderPayload = 'class_reminder';
+
+  /// Prefix for the after-class "mark attendance" nudge. The full payload is
+  /// `attendance_checkin|<subjectId>|<slot>` where slot is the class start time
+  /// (the occurrence key). A plain tap deep-links to the Attendance tab.
+  static const String attendanceCheckInPrefix = 'attendance_checkin';
+
+  /// Prefix set by [selectedPayload] when the user taps a Present/Absent action
+  /// on the check-in notification: `attendance_mark|<present|absent>|<subjectId>|<slot>`.
+  static const String attendanceMarkPrefix = 'attendance_mark';
+
+  static const String _actionPresent = 'att_present';
+  static const String _actionAbsent = 'att_absent';
+
+  /// Parses an `attendance_mark|<status>|<subjectId>|<slot>` payload into its
+  /// parts, or returns null if [payload] isn't a mark payload. Pure — unit
+  /// tested. [slot] may be empty.
+  static ({String status, String subjectId, String slot})? parseAttendanceMark(
+      String payload) {
+    if (!payload.startsWith('$attendanceMarkPrefix|')) return null;
+    final parts = payload.split('|');
+    // [prefix, status, subjectId, slot?]
+    if (parts.length < 3) return null;
+    final status = parts[1];
+    if (status != 'present' && status != 'absent') return null;
+    final subjectId = parts[2];
+    if (subjectId.isEmpty) return null;
+    final slot = parts.length >= 4 ? parts[3] : '';
+    return (status: status, subjectId: subjectId, slot: slot);
+  }
 
   static const _channelId = 'classtrack_reminders';
   static const _channelName = 'Class reminders';
@@ -126,23 +161,40 @@ class NotificationService {
     );
     await _plugin.initialize(
       settings: const InitializationSettings(android: androidInit, iOS: iosInit),
-      onDidReceiveNotificationResponse: (resp) {
-        final p = resp.payload;
-        if (p != null && p.isNotEmpty) selectedPayload.value = p;
-      },
+      onDidReceiveNotificationResponse: _handleResponse,
     );
     // Cold start: if the app was launched by tapping a notification, surface
     // its payload so the UI can deep-link once it's ready.
     try {
       final launch = await _plugin.getNotificationAppLaunchDetails();
       if (launch?.didNotificationLaunchApp ?? false) {
-        final p = launch!.notificationResponse?.payload;
-        if (p != null && p.isNotEmpty) selectedPayload.value = p;
+        final resp = launch!.notificationResponse;
+        if (resp != null) _handleResponse(resp);
       }
     } catch (_) {/* launch details are best-effort */}
     await _refreshScheduleMode();
     await _migrateNotificationIdsIfNeeded();
     _ready = true;
+  }
+
+  /// Turns a tapped notification (body OR an action button) into a
+  /// [selectedPayload] the UI can act on. A Present/Absent action on the
+  /// attendance check-in is rewritten to an `attendance_mark|…` payload so the
+  /// app marks that class when it opens; every other tap forwards its payload.
+  void _handleResponse(NotificationResponse resp) {
+    final p = resp.payload;
+    if (p == null || p.isEmpty) return;
+    final action = resp.actionId;
+    if (p.startsWith('$attendanceCheckInPrefix|') &&
+        (action == _actionPresent || action == _actionAbsent)) {
+      final status = action == _actionPresent ? 'present' : 'absent';
+      // p == "attendance_checkin|<subjectId>|<slot>" → keep everything after
+      // the prefix so the subjectId/slot are preserved.
+      final rest = p.substring(attendanceCheckInPrefix.length + 1);
+      selectedPayload.value = '$attendanceMarkPrefix|$status|$rest';
+    } else {
+      selectedPayload.value = p;
+    }
   }
 
   /// One-time cleanup after an id-scheme change: cancel every locally scheduled
@@ -207,6 +259,28 @@ class NotificationService {
           channelDescription: _channelDesc,
           importance: Importance.high,
           priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(),
+      );
+
+  /// Notification details for the after-class attendance check-in, with
+  /// Present / Absent action buttons (Android). `showsUserInterface: true`
+  /// launches the app when an action is tapped so the marking happens in the
+  /// foreground isolate (where Firebase + the signed-in user are available);
+  /// [_handleResponse] then records the class. iOS falls back to a plain tap.
+  NotificationDetails get _checkInDetails => const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _channelId,
+          _channelName,
+          channelDescription: _channelDesc,
+          importance: Importance.high,
+          priority: Priority.high,
+          actions: <AndroidNotificationAction>[
+            AndroidNotificationAction(_actionPresent, '✅ Present',
+                showsUserInterface: true),
+            AndroidNotificationAction(_actionAbsent, '❌ Absent',
+                showsUserInterface: true),
+          ],
         ),
         iOS: DarwinNotificationDetails(),
       );
@@ -282,6 +356,105 @@ class NotificationService {
     _classReminderIds[subject.id] = scheduledIds;
   }
 
+  /// After-class attendance check-in id (band 8). Keyed by subject + weekday +
+  /// start + end time so every class slot gets its own nudge.
+  @visibleForTesting
+  static int attendanceCheckId(
+          String subjectId, int weekday0, String startTime, String endTime) =>
+      8 * _idBand + _hash20('$subjectId#$weekday0#$startTime#$endTime');
+
+  /// Schedule a weekly "mark your attendance" nudge [minutesAfter] the end of
+  /// each recurring class. The notification carries Present/Absent actions and,
+  /// on a plain tap, deep-links to the Attendance tab. Idempotent: re-scheduling
+  /// overwrites by id, and previously-scheduled ids for the subject are
+  /// cancelled first so edited/removed sessions don't linger.
+  Future<void> scheduleAttendanceCheckIns(
+    Subject subject,
+    List<ClassSession> sessions, {
+    int minutesAfter = 5,
+    NotificationPrefs? prefs,
+  }) async {
+    await init();
+    _scheduledCheckSubjects.add(subject.id);
+
+    final previous = _checkInIds[subject.id];
+    if (previous != null) {
+      for (final oldId in previous) {
+        await _plugin.cancel(id: oldId);
+      }
+    }
+
+    final scheduledIds = <int>{};
+    for (final s in sessions) {
+      if (!s.recurring || s.dayOfWeek == null) continue;
+      final parts = s.endTime.split(':');
+      if (parts.length != 2) continue;
+      final hour = int.tryParse(parts[0]) ?? 9;
+      final minute = int.tryParse(parts[1]) ?? 0;
+
+      // Fire minutesAfter the class END. Reuse the weekday-aligned helper with a
+      // negative "before" so it adds the delay instead of subtracting it.
+      final when = _nextInstanceOfWeekdayTime(
+        weekday0: s.dayOfWeek!,
+        hour: hour,
+        minute: minute,
+        minutesBefore: -minutesAfter,
+      );
+
+      final id =
+          attendanceCheckId(subject.id, s.dayOfWeek!, s.startTime, s.endTime);
+      if (prefs != null && prefs.isQuietHour(when.hour)) {
+        await _plugin.cancel(id: id);
+        continue;
+      }
+
+      await _plugin.zonedSchedule(
+        id: id,
+        title: 'How was ${subject.name}?',
+        body: 'Tap Present or Absent to mark your attendance.',
+        scheduledDate: when,
+        notificationDetails: _checkInDetails,
+        androidScheduleMode: _scheduleMode,
+        matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+        // slot = the class start time, matching the per-occurrence key used
+        // everywhere else so marking from the notification never double-counts.
+        payload: '$attendanceCheckInPrefix|${subject.id}|${s.startTime}',
+      );
+      scheduledIds.add(id);
+    }
+    _checkInIds[subject.id] = scheduledIds;
+  }
+
+  /// Cancel a subject's after-class check-ins (on delete or toggle-off).
+  Future<void> cancelAttendanceCheckInsForSubject(String subjectId) async {
+    await init();
+    final ids = _checkInIds.remove(subjectId);
+    if (ids != null) {
+      for (final id in ids) {
+        await _plugin.cancel(id: id);
+      }
+    }
+    _scheduledCheckSubjects.remove(subjectId);
+  }
+
+  /// Reconcile scheduled check-ins against the subjects that still exist,
+  /// cancelling any for deleted subjects. Pass an empty set to cancel all.
+  Future<void> pruneAttendanceCheckIns(Set<String> currentSubjectIds) async {
+    await init();
+    final stale = _scheduledCheckSubjects.difference(currentSubjectIds);
+    for (final subjectId in stale) {
+      final ids = _checkInIds.remove(subjectId);
+      if (ids != null) {
+        for (final id in ids) {
+          await _plugin.cancel(id: id);
+        }
+      }
+    }
+    _scheduledCheckSubjects
+      ..clear()
+      ..addAll(currentSubjectIds);
+  }
+
   /// Task/course/video id band = 2.
   int _idForTask(String taskId) => 2 * _idBand + _hash20(taskId);
 
@@ -297,8 +470,15 @@ class NotificationService {
     for (final t in tasks) {
       if (t.done || t.dueDate == null) continue;
       final due = t.dueDate!;
-      var when = tz.TZDateTime(tz.local, due.year, due.month, due.day, 9, 0)
-          .subtract(Duration(minutes: minutesBefore));
+      // Items with a specific time-of-day (events, timed deadlines) remind
+      // [minutesBefore] their start. All-day items (stored at midnight) keep
+      // the 9:00 AM morning nudge so they don't fire at 00:00.
+      final hasTime = !(due.hour == 0 && due.minute == 0);
+      final base = hasTime
+          ? tz.TZDateTime(
+              tz.local, due.year, due.month, due.day, due.hour, due.minute)
+          : tz.TZDateTime(tz.local, due.year, due.month, due.day, 9, 0);
+      var when = base.subtract(Duration(minutes: minutesBefore));
       if (when.isBefore(now)) continue; // don't schedule in the past
       final id = _idForTask(t.id);
       if (prefs != null && prefs.isQuietHour(when.hour)) {
@@ -306,7 +486,7 @@ class NotificationService {
         continue;
       }
       final label = switch (t.type) {
-        TaskType.course => 'Course due',
+        TaskType.event => 'Event',
         TaskType.video => 'Video planned',
         TaskType.task => 'Task due',
       };
@@ -557,6 +737,8 @@ class NotificationService {
     // can't suppress the next user's prune/reschedule on a shared device.
     _scheduledClassSubjects.clear();
     _classReminderIds.clear();
+    _scheduledCheckSubjects.clear();
+    _checkInIds.clear();
   }
 
   tz.TZDateTime _nextInstanceOfWeekdayTime({

@@ -6,8 +6,8 @@ class AppTypography {
   AppTypography._();
 
   static TextTheme textTheme(Color primary, Color secondary) {
-    final heading = GoogleFonts.poppins;
-    final body = GoogleFonts.inter;
+    const heading = GoogleFonts.poppins;
+    const body = GoogleFonts.inter;
 
     return TextTheme(
       displaySmall: heading(

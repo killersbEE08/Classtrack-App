@@ -138,6 +138,66 @@ final onboardingDoneProvider =
   return OnboardingController(ref.watch(sharedPrefsProvider));
 });
 
+/// Whether the first-time in-app "home tour" (coach-mark walkthrough of the
+/// bottom nav and quick-add button) has been shown.
+///
+/// Device-global (not per-user), same as onboarding: the tour explains the
+/// app's UI, so it should appear once per install rather than once per account.
+class HomeTourController extends StateNotifier<bool> {
+  final SharedPreferences _prefs;
+  HomeTourController(this._prefs)
+      : super(_prefs.getBool(AppConstants.prefsHomeTourDone) ?? false);
+
+  Future<void> complete() async {
+    await _prefs.setBool(AppConstants.prefsHomeTourDone, true);
+    state = true;
+  }
+
+  /// Re-arms the tour so it plays again (used by the "Show app tour" action in
+  /// Settings).
+  Future<void> reset() async {
+    await _prefs.setBool(AppConstants.prefsHomeTourDone, false);
+    state = false;
+  }
+}
+
+final homeTourDoneProvider =
+    StateNotifierProvider<HomeTourController, bool>((ref) {
+  return HomeTourController(ref.watch(sharedPrefsProvider));
+});
+
+/// Tracks whether a one-time feature-discovery tip (💡) has been dismissed.
+///
+/// Keyed by the tip's SharedPreferences key (e.g. [AppConstants.prefsTipNotes]).
+/// Device-global — like the onboarding + home tour — because these tips teach
+/// the app's features, so they should appear once per install rather than once
+/// per account.
+class FeatureTipController extends StateNotifier<bool> {
+  final SharedPreferences _prefs;
+  final String _key;
+  FeatureTipController(this._prefs, this._key)
+      : super(_prefs.getBool(_key) ?? false);
+
+  /// Marks the tip as seen so it never shows again.
+  Future<void> dismiss() async {
+    if (state) return;
+    state = true;
+    await _prefs.setBool(_key, true);
+  }
+
+  /// Re-arms the tip (used only for testing / a future "reset tips" action).
+  Future<void> reset() async {
+    state = false;
+    await _prefs.setBool(_key, false);
+  }
+}
+
+/// Family of one-time feature tips, keyed by their SharedPreferences key.
+final featureTipProvider =
+    StateNotifierProvider.family<FeatureTipController, bool, String>(
+  (ref, key) => FeatureTipController(ref.watch(sharedPrefsProvider), key),
+);
+
 /// App theme mode (system/light/dark), persisted per user.
 class ThemeModeController extends StateNotifier<ThemeMode> {
   final ScopedPrefs _prefs;

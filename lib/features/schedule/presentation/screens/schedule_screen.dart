@@ -9,7 +9,6 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../shared/widgets/states.dart';
 import '../../../../shared/widgets/ui_kit.dart';
-import '../../../settings/presentation/screens/settings_screen.dart';
 import '../../../import/presentation/screens/import_entry.dart';
 import '../../../attendance/domain/attendance_record.dart';
 import '../../../attendance/presentation/providers/attendance_providers.dart';
@@ -148,12 +147,6 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                     background: AppColors.primary,
                     iconColor: Colors.white,
                     onTap: _openEditor,
-                  ),
-                  const SizedBox(width: 10),
-                  RoundIconButton(
-                    icon: Icons.settings_rounded,
-                    onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => const SettingsScreen())),
                   ),
                 ],
               ),
@@ -455,7 +448,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
               outsideTextStyle: theme.textTheme.bodySmall!
                   .copyWith(color: theme.disabledColor),
               todayDecoration: BoxDecoration(
-                color: AppColors.primary.withOpacity(0.15),
+                color: AppColors.primary.withValues(alpha: 0.15),
                 shape: BoxShape.circle,
               ),
               todayTextStyle: const TextStyle(
@@ -520,7 +513,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Material(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -560,7 +553,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                   width: 34,
                   height: 34,
                   decoration: BoxDecoration(
-                      color: color.withOpacity(0.9), shape: BoxShape.circle),
+                      color: color.withValues(alpha: 0.9), shape: BoxShape.circle),
                   child: const Icon(Icons.chevron_right_rounded,
                       color: Colors.white, size: 20),
                 ),
@@ -614,7 +607,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
           const SizedBox(width: 12),
           Expanded(
             child: Material(
-              color: color.withOpacity(0.10),
+              color: color.withValues(alpha: 0.10),
               borderRadius: BorderRadius.circular(18),
               clipBehavior: Clip.antiAlias,
               child: InkWell(
@@ -666,7 +659,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.10),
+          color: color.withValues(alpha: 0.10),
           borderRadius: BorderRadius.circular(14),
         ),
         child: Row(
@@ -728,7 +721,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Material(
-        color: AppColors.danger.withOpacity(0.10),
+        color: AppColors.danger.withValues(alpha: 0.10),
         borderRadius: BorderRadius.circular(18),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -745,7 +738,7 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                   width: 42,
                   height: 42,
                   decoration: BoxDecoration(
-                      color: AppColors.danger.withOpacity(0.15),
+                      color: AppColors.danger.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(12)),
                   child: const Icon(Icons.event_note_rounded,
                       color: AppColors.danger, size: 20),

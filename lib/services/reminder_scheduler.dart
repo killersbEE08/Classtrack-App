@@ -63,6 +63,23 @@ final reminderSyncProvider = Provider<void>((ref) {
     }
   }
 
+  // ── Attendance check-ins (after each class ends) ──────────────────────────
+  if (prefs.attendanceCheckIns) {
+    final currentSubjectIds = sessionsBySubject.keys.toSet();
+    service.pruneAttendanceCheckIns(currentSubjectIds);
+    for (final entry in sessionsBySubject.entries) {
+      final subject = subjectsById[entry.key];
+      if (subject != null) {
+        service.scheduleAttendanceCheckIns(subject, entry.value, prefs: prefs);
+      }
+    }
+  } else {
+    service.pruneAttendanceCheckIns(<String>{});
+    for (final id in sessionsBySubject.keys) {
+      service.cancelAttendanceCheckInsForSubject(id);
+    }
+  }
+
   // ── Tasks ────────────────────────────────────────────────────────────────
   if (prefs.tasks) {
     service.scheduleForTasks(tasks, minutesBefore: lead, prefs: prefs);

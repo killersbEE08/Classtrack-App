@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:classtrack/core/theme/app_icons.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/validators.dart';
 import '../../../../shared/widgets/buttons.dart';
 import '../auth_errors.dart';
 import '../providers/auth_providers.dart';
@@ -153,8 +154,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       labelText: 'Email',
                       prefixIcon: Icon(Icons.mail_outline_rounded),
                     ),
-                    validator: (v) =>
-                        (v == null || !v.contains('@')) ? 'Enter a valid email' : null,
+                    validator: Validators.email,
                   )
                       .animate()
                       .fadeIn(delay: 280.ms, duration: 350.ms)
@@ -164,11 +164,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     controller: _password,
                     obscureText: _obscure,
                     textInputAction: TextInputAction.done,
+                    autofillHints: const [AutofillHints.password],
                     onFieldSubmitted: (_) => loading ? null : _submit(),
                     decoration: InputDecoration(
                       labelText: 'Password',
                       prefixIcon: const Icon(Icons.lock_outline_rounded),
                       suffixIcon: IconButton(
+                        tooltip: _obscure ? 'Show password' : 'Hide password',
                         icon: Icon(_obscure
                             ? Icons.visibility_outlined
                             : Icons.visibility_off_outlined),
@@ -176,7 +178,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       ),
                     ),
                     validator: (v) =>
-                        (v == null || v.length < 6) ? 'Min 6 characters' : null,
+                        (v == null || v.isEmpty) ? 'Enter your password' : null,
                   )
                       .animate()
                       .fadeIn(delay: 340.ms, duration: 350.ms)

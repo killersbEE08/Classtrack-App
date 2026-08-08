@@ -96,26 +96,74 @@ const MODELS = [
   "gemini-1.5-flash",
 ];
 
+// Chat prioritises the low-latency non-"thinking" flash models so replies come
+// back fast. (gemini-2.5-flash spends extra time "thinking" before answering,
+// which noticeably slows short conversational turns — so it's tried only as a
+// fallback here.) Ordered fastest → most-capable fallback.
+const CHAT_MODELS = [
+  "gemini-2.0-flash",
+  "gemini-flash-latest",
+  "gemini-2.5-flash",
+  "gemini-1.5-flash",
+];
+
 /// Generate text, trying each model until one works. [request] is whatever
 /// generateContent accepts (a parts array or a { contents } object).
-async function generateText(genAI, { systemInstruction, jsonOut, request }) {
-  let lastErr;
-  for (const m of MODELS) {
-    try {
-      const model = genAI.getGenerativeModel({
-        model: m,
-        systemInstruction,
-        generationConfig: jsonOut
-          ? { responseMimeType: "application/json" }
-          : undefined,
-      });
-      const result = await model.generateContent(request);
-      return result.response.text();
-    } catch (e) {
-      lastErr = e;
-    }
+/// [models] overrides the default model order; [maxOutputTokens] caps the
+/// reply length (both used to keep the chat snappy).
+async function generateText(
+  genAI,
+  {
+    systemInstruction,
+    jsonOut,
+    request,
+    models = MODELS,
+    maxOutputTokens,
+    thinkingBudget,
   }
-  throw lastErr || new Error("All models failed");
+) {
+  // Base generation config shared by every attempt.
+  const baseConfig = {};
+  if (jsonOut) baseConfig.responseMimeType = "application/json";
+  if (maxOutputTokens) baseConfig.maxOutputTokens = maxOutputTokens;
+
+  // Run the whole model list once. `withThinking` toggles the 2.5-series
+  // "thinking" phase via thinkingConfig (thinkingBudget 0 disables it). We keep
+  // this in its own helper so we can transparently retry WITHOUT thinkingConfig
+  // if a model/SDK combo rejects the field — chat must never break over it.
+  async function run(withThinking) {
+    let lastErr;
+    const generationConfig = { ...baseConfig };
+    if (withThinking && thinkingBudget !== undefined) {
+      generationConfig.thinkingConfig = { thinkingBudget };
+    }
+    const hasConfig = Object.keys(generationConfig).length > 0;
+    for (const m of models) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: m,
+          systemInstruction,
+          generationConfig: hasConfig ? generationConfig : undefined,
+        });
+        const result = await model.generateContent(request);
+        return { text: result.response.text() };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    return { err: lastErr };
+  }
+
+  // First pass: with thinkingConfig when a budget was requested.
+  let res = await run(thinkingBudget !== undefined);
+  if (res.text !== undefined) return res.text;
+  // Fallback: retry the list without thinkingConfig in case the legacy SDK or a
+  // particular model doesn't accept it.
+  if (thinkingBudget !== undefined) {
+    res = await run(false);
+    if (res.text !== undefined) return res.text;
+  }
+  throw res.err || new Error("All models failed");
 }
 
 const SYSTEM_PROMPT = `You are a precise timetable parser for a student attendance app.
@@ -182,7 +230,7 @@ ACTIONS (invisible automation): When the user's message clearly asks to log or s
 { "actions": [
   { "type": "expense", "title": string, "amount": number, "category": "food"|"transport"|"books"|"rent"|"fun"|"health"|"other" },
   { "type": "exam", "title": string, "date": "YYYY-MM-DD", "time": "HH:MM"|null, "subject": string|null, "room": string|null, "note": string|null },
-  { "type": "task", "title": string, "dueDate": "YYYY-MM-DD"|null, "priority": "low"|"medium"|"high", "taskType": "task"|"course"|"video", "subject": string|null },
+  { "type": "task", "title": string, "dueDate": "YYYY-MM-DD"|null, "priority": "low"|"medium"|"high", "taskType": "task"|"event"|"video", "subject": string|null },
   { "type": "note", "title": string, "body": string, "subject": string|null },
   { "type": "subject", "name": string, "color": "#RRGGBB"|null, "icon": string|null, "startDate": "YYYY-MM-DD"|null, "endDate": "YYYY-MM-DD"|null },
   { "type": "grade", "title": string, "score": number, "maxScore": number, "weight": number|null, "subject": string|null },
@@ -193,8 +241,8 @@ ACTIONS (invisible automation): When the user's message clearly asks to log or s
   { "type": "attendance", "subject": string, "status": "present"|"absent"|"cancelled", "date": "YYYY-MM-DD"|null },
   { "type": "budget", "amount": number },
   { "type": "linkNote", "noteTitle": string, "examTitle": string },
-  { "type": "update", "entity": "task"|"exam"|"expense"|"note"|"grade"|"subject"|"class"|"habit", "match": string, "amount": number|null, "category": string|null, "newTitle": string|null, "newName": string|null, "note": string|null, "body": string|null, "dueDate": "YYYY-MM-DD"|null, "date": "YYYY-MM-DD"|null, "time": "HH:MM"|null, "priority": "low"|"medium"|"high"|null, "taskType": "task"|"course"|"video"|null, "done": boolean|null, "newAmount": number|null, "newCategory": string|null, "score": number|null, "maxScore": number|null, "weight": number|null, "room": string|null, "color": "#RRGGBB"|null, "icon": string|null, "startDate": "YYYY-MM-DD"|null, "endDate": "YYYY-MM-DD"|null, "subject": string|null, "day": "Monday".."Sunday"|null, "start": "HH:MM"|null, "end": "HH:MM"|null, "newDay": "Monday".."Sunday"|null },
-  { "type": "delete", "entity": "task"|"exam"|"expense"|"note"|"grade"|"subject"|"class"|"habit", "match": string, "amount": number|null, "category": "food"|"transport"|"books"|"rent"|"fun"|"health"|"other"|null, "subject": string|null, "day": "Monday".."Sunday"|null }
+  { "type": "update", "entity": "task"|"exam"|"expense"|"note"|"grade"|"subject"|"class"|"habit", "match": string, "amount": number|null, "category": string|null, "newTitle": string|null, "newName": string|null, "note": string|null, "body": string|null, "dueDate": "YYYY-MM-DD"|null, "date": "YYYY-MM-DD"|null, "time": "HH:MM"|null, "priority": "low"|"medium"|"high"|null, "taskType": "task"|"event"|"video"|null, "done": boolean|null, "newAmount": number|null, "newCategory": string|null, "score": number|null, "maxScore": number|null, "weight": number|null, "room": string|null, "color": "#RRGGBB"|null, "icon": string|null, "startDate": "YYYY-MM-DD"|null, "endDate": "YYYY-MM-DD"|null, "subject": string|null, "day": "Monday".."Sunday"|null, "start": "HH:MM"|null, "end": "HH:MM"|null, "newDay": "Monday".."Sunday"|null },
+  { "type": "delete", "entity": "task"|"exam"|"expense"|"note"|"grade"|"subject"|"class"|"habit", "all": boolean, "match": string, "amount": number|null, "category": "food"|"transport"|"books"|"rent"|"fun"|"health"|"other"|null, "subject": string|null, "day": "Monday".."Sunday"|null }
 ] }
 \`\`\`
 Rules for actions:
@@ -205,6 +253,8 @@ Rules for actions:
 - ATTENDANCE: "mark me present in Maths today" / "I attended DBMS" / "I missed Physics" → attendance (absent = missed). Only use a subject name present in the user's data.
 - UPDATE: "rename my DBMS assignment to …", "change the DP-800 exam to Friday", "mark the essay task done", "change Physics color" → an update action. "match" is the current title/name; put changed fields in the matching keys (newTitle/newName for renames). For an expense, identify it with "match" (its title) and/or "amount" and "category" (e.g. the 20 food expense → amount 20, category "food"), and put any changes in newTitle/newAmount/newCategory. To move/edit a class ("change my Monday Maths class to 11:00", "move DBMS to Tuesday"), use entity "class" with subject + day to find it and start/end/newDay/room for the changes.
 - DELETE: "delete the Maths quiz grade", "remove the DP-800 exam", "delete the Physics subject", "remove my Monday Maths class", "delete the gym habit" → a delete action with entity + match (for a class, give subject + day). For an expense, ALWAYS include the "amount" and "category" when the user mentions them ("delete the 20 rupees food transaction" → entity "expense", amount 20, category "food"), since expenses often have no distinctive title.
+- DELETE ALL / CLEAR: When the user asks to remove EVERY item of a type — "delete all my subjects", "remove all tasks", "clear my expenses", "delete every habit", "wipe all my classes" (including subjects/classes that were added by scanning a timetable) — emit ONE single delete action for that entity with "all": true and omit "match". Do NOT emit one action per item, and do NOT try to list them. For classes you may add "subject" to clear only that subject's classes; omit it to clear all classes.
+- HONESTY: Never claim you deleted, updated or added something unless you actually emitted the matching action for it. If you are not sure which item the user means (and it is not a "delete all"), ask a brief clarifying question INSTEAD of emitting an action and INSTEAD of saying "Done".
 - BUDGET: "set my budget to 5000" → budget.
 - You have full read access to the user's data below (attendance incl. this week, subjects & schedule, tasks, exams both upcoming AND past, grades by subject, notes, expenses with a category-wise breakdown AND previous-month history, study time incl. history, habits). This includes HISTORICAL data — answer questions about last month, previous months and past items directly from it, and never claim you lack history or a breakdown when the data is present. You can also CREATE, UPDATE and DELETE items across EVERY feature (tasks, classes, subjects, exams, grades, notes, expenses, habits, attendance and study), not just the current period.
 - Match update/delete targets by the names/titles shown in the user's data. If nothing matches, don't emit the action — ask a short clarifying question instead.
@@ -407,6 +457,13 @@ export const chat = onCall(
         systemInstruction,
         jsonOut: false,
         request: { contents },
+        models: CHAT_MODELS,
+        // Disable the 2.5-series "thinking" phase (thinkingBudget 0) so it can
+        // never consume the output budget — that was truncating the daily
+        // summary / insights mid-sentence (e.g. "…from 09:1") — and give a
+        // generous cap so full briefings and answers complete.
+        maxOutputTokens: 2048,
+        thinkingBudget: 0,
       });
       return {
         text: text || "Sorry, I couldn't come up with a reply.",

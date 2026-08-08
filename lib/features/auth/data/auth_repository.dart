@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/validators.dart';
 import '../domain/app_user.dart';
 
 /// Handles authentication and the users/{uid} profile document.
@@ -47,8 +48,12 @@ class AuthRepository {
       email: email.trim(),
       password: password,
     );
-    await cred.user?.updateDisplayName(displayName.trim());
-    await _ensureProfile(cred.user!, displayName: displayName.trim());
+    // Sanitize the name before it touches Auth or Firestore so a user can't
+    // store HTML/script (e.g. "<b>Alert</b>") that could render on a web/email
+    // surface downstream.
+    final cleanName = Validators.sanitizeName(displayName);
+    await cred.user?.updateDisplayName(cleanName);
+    await _ensureProfile(cred.user!, displayName: cleanName);
     // Send a verification link so the account's email is authenticated.
     await cred.user?.sendEmailVerification();
   }
@@ -112,7 +117,7 @@ class AuthRepository {
     if (!snap.exists) {
       final profile = AppUser(
         uid: user.uid,
-        displayName: displayName ?? user.displayName,
+        displayName: Validators.sanitizeName(displayName ?? user.displayName),
         email: user.email,
         photoUrl: user.photoURL,
       );
@@ -147,8 +152,9 @@ class AuthRepository {
       );
 
   Future<void> updateDisplayName(String uid, String name) async {
-    await _auth.currentUser?.updateDisplayName(name.trim());
-    await _userDoc(uid).set({'displayName': name.trim()}, SetOptions(merge: true));
+    final clean = Validators.sanitizeName(name);
+    await _auth.currentUser?.updateDisplayName(clean);
+    await _userDoc(uid).set({'displayName': clean}, SetOptions(merge: true));
   }
 
   /// Full account deletion — required for Play Store data-safety compliance.

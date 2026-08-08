@@ -33,6 +33,13 @@ class TaskRepository {
 
   Future<void> add(TaskItem task) => _col.add(task.toMap());
 
+  /// One-shot read of all tasks (used by import to avoid creating duplicates
+  /// on re-import).
+  Future<List<TaskItem>> getAll() async {
+    final snap = await _col.get();
+    return snap.docs.map((d) => TaskItem.fromMap(d.id, d.data())).toList();
+  }
+
   Future<void> update(TaskItem task) =>
       _col.doc(task.id).set(task.toMap(), SetOptions(merge: true));
 

@@ -45,7 +45,7 @@ String buildAnalyticsContext(Ref ref) {
   final name = profile?.displayName?.trim();
   if (name != null && name.isNotEmpty) {
     sb.writeln("The student's name is ${name.split(RegExp(r'\s+')).first}. "
-        "Address them by their first name where it feels natural, not in every line.");
+        'Address them by their first name where it feels natural, not in every line.');
   }
 
   final target =

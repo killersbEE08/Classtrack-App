@@ -147,7 +147,7 @@ class SubjectDetailScreen extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 20),
-          _historyStrip(context, records),
+          _historyStrip(context, ref, subject, records),
           _sectionTitle(theme, 'Mark today'),
           // Big, interactive mark buttons with haptic + toast feedback.
           Row(
@@ -327,10 +327,15 @@ class SubjectDetailScreen extends ConsumerWidget {
       );
 
   /// Interactive recent-attendance strip: the last marked days as colored dots.
-  Widget _historyStrip(BuildContext context, List records) {
+  /// Tapping a dot lets the student correct or clear that day's attendance.
+  Widget _historyStrip(BuildContext context, WidgetRef ref, Subject subject,
+      List<AttendanceRecord> records) {
     if (records.isEmpty) return const SizedBox.shrink();
     final theme = Theme.of(context);
-    final sorted = [...records]..sort((a, b) => a.date.compareTo(b.date));
+    // Collapse duplicate / superseded records so a single class occurrence is
+    // shown only once (fixes e.g. 3 dots for 2 marked classes).
+    final deduped = dedupeAttendanceRecords(records);
+    final sorted = [...deduped]..sort((a, b) => a.date.compareTo(b.date));
     final recent =
         sorted.length > 16 ? sorted.sublist(sorted.length - 16) : sorted;
     return Padding(
@@ -343,26 +348,109 @@ class SubjectDetailScreen extends ConsumerWidget {
             spacing: 7,
             runSpacing: 7,
             children: recent.map((r) {
-              final c = (r.status as AttendanceStatus).color;
+              final c = r.status.color;
               return Tooltip(
                 message:
-                    '${DateUtilsX.prettyDate(r.date)} · ${(r.status as AttendanceStatus).label}',
-                child: Container(
-                  width: 26,
-                  height: 26,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: c.withValues(alpha: 0.16),
-                    shape: BoxShape.circle,
+                    '${DateUtilsX.prettyDate(r.date)} · ${r.status.label} · tap to edit',
+                child: InkWell(
+                  onTap: () => _editRecord(context, ref, subject, r),
+                  customBorder: const CircleBorder(),
+                  child: Container(
+                    width: 26,
+                    height: 26,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: c.withValues(alpha: 0.16),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(r.status.icon, size: 14, color: c),
                   ),
-                  child: Icon((r.status as AttendanceStatus).icon,
-                      size: 14, color: c),
                 ),
               );
             }).toList(),
           ),
+          const SizedBox(height: 6),
+          Text(
+            'Tap a day to change or clear it',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+          ),
         ],
       ),
+    );
+  }
+
+  /// Bottom sheet to correct a single past attendance day/occurrence. Reuses the
+  /// idempotent, counter-syncing write path, so changing or clearing a day keeps
+  /// the aggregate Attended/Missed/Cancelled totals correct.
+  Future<void> _editRecord(BuildContext context, WidgetRef ref,
+      Subject subject, AttendanceRecord r) async {
+    final controller = ref.read(attendanceControllerProvider);
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        Widget option(
+            String label, IconData icon, Color color, AttendanceStatus status) {
+          final selected = r.status == status;
+          return ListTile(
+            leading: Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.16),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            title: Text(label),
+            trailing:
+                selected ? Icon(Icons.check_rounded, color: color) : null,
+            onTap: () {
+              Navigator.pop(ctx);
+              controller.setForOccurrence(subject.id, r.date, r.slot, status);
+            },
+          );
+        }
+
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 2),
+                child: Text(DateUtilsX.prettyFullDate(r.date),
+                    style: theme.textTheme.titleMedium),
+              ),
+              if (r.slot.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: Text('Class at ${DateUtilsX.displayTime(ctx, r.slot)}',
+                      style: theme.textTheme.bodySmall),
+                ),
+              option('Present', Icons.check_rounded, AppColors.success,
+                  AttendanceStatus.present),
+              option('Absent', Icons.close_rounded, AppColors.danger,
+                  AttendanceStatus.absent),
+              option('Cancelled', Icons.event_busy_rounded,
+                  AppColors.cancelled, AttendanceStatus.cancelled),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded),
+                title: const Text('Clear this day'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  controller.setForOccurrence(
+                      subject.id, r.date, r.slot, AttendanceStatus.unmarked);
+                },
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -415,7 +503,7 @@ class SubjectDetailScreen extends ConsumerWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
+          color: color.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(16),
         ),
         child: Column(
@@ -584,7 +672,7 @@ class SubjectDetailScreen extends ConsumerWidget {
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: color.withOpacity(0.12),
+                  backgroundColor: color.withValues(alpha: 0.12),
                   child: Icon(icon, color: color, size: 20),
                 ),
                 const SizedBox(width: 12),

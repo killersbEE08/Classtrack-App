@@ -1,9 +1,15 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:receive_sharing_intent/receive_sharing_intent.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/providers/app_settings_provider.dart';
 import '../../../../services/analytics_service.dart';
 import '../../../../services/notification_service.dart';
 import '../../../../services/reminder_scheduler.dart';
@@ -14,12 +20,19 @@ import '../../../schedule/presentation/screens/schedule_screen.dart';
 import '../../../schedule/presentation/screens/edit_session_screen.dart';
 import '../../../subjects/presentation/screens/edit_subject_screen.dart';
 import '../../../tasks/presentation/screens/tasks_screen.dart';
+import '../../../tasks/presentation/screens/share_link_handler.dart';
 import '../../../attendance/presentation/screens/attendance_screen.dart';
+import '../../../attendance/presentation/providers/attendance_providers.dart';
+import '../../../attendance/domain/attendance_record.dart';
+import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../../exams/presentation/screens/exams_screen.dart';
 import '../../../expenses/presentation/screens/expenses_screen.dart';
 import '../../../grades/presentation/screens/grades_screen.dart';
 import '../../../habits/presentation/screens/habits_screen.dart';
 import '../../../notes/presentation/screens/notes_screen.dart';
+import '../../../tips/presentation/providers/tips_providers.dart';
+import '../../../tips/presentation/screens/tips_screen.dart';
+import '../widgets/home_tour.dart';
 import 'dashboard_screen.dart';
 
 /// Opens the "quick add" menu triggered by the center FAB. Available app-wide.
@@ -94,7 +107,7 @@ Future<void> showQuickAddSheet(BuildContext context) async {
                 icon: Icons.check_circle_outline_rounded,
                 color: AppColors.primary,
                 title: 'New task',
-                subtitle: 'Assignment, deadline, course or video',
+                subtitle: 'Assignment, deadline, event or video',
                 onTap: () => Navigator.pop(ctx, _QuickAddAction.task),
               ),
               option(
@@ -212,6 +225,21 @@ class _HomeShellState extends ConsumerState<HomeShell>
     with WidgetsBindingObserver {
   int _index = 0;
 
+  /// Targets highlighted by the first-run home tour.
+  final GlobalKey _fabKey = GlobalKey();
+  final GlobalKey _navKey = GlobalKey();
+
+  /// Live overlay entry for the tour (null when not showing). Guards against
+  /// starting it twice.
+  OverlayEntry? _tourEntry;
+
+  /// Live subscription to links/text shared into the app while it's running.
+  StreamSubscription<List<SharedMediaFile>>? _shareSub;
+
+  /// Guards against opening the share sheet twice for the same share (the
+  /// initial-media and stream callbacks can otherwise overlap).
+  bool _handlingShare = false;
+
   static const _screens = [
     DashboardScreen(),
     ScheduleScreen(),
@@ -228,10 +256,130 @@ class _HomeShellState extends ConsumerState<HomeShell>
     NotificationService.selectedPayload.addListener(_onNotificationPayload);
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _onNotificationPayload());
+    _initShareIntake();
+    // Show the first-run home tour once the shell has settled (after entrance
+    // animations), if it hasn't been seen yet. Returning users who are 7+ days
+    // in (tour already done) instead get the one-off Tips & Tricks nudge.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 700), () {
+        if (!mounted) return;
+        if (!ref.read(homeTourDoneProvider)) {
+          _startTour();
+        } else if (ref.read(shouldShowTipsPromptProvider)) {
+          _showTipsPrompt();
+        }
+      });
+    });
+  }
+
+  /// Auto-opens the "✨ Tips & Tricks" page once, for returning users who have
+  /// been using ClassTrack for 7+ days but still have features left to try.
+  Future<void> _showTipsPrompt() async {
+    if (!mounted) return;
+    // Persist immediately so it can never fire twice, even if navigation is
+    // interrupted.
+    await ref.read(tipsPromptShownProvider.notifier).markShown();
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const TipsScreen()),
+    );
+  }
+
+  /// Inserts the coach-mark tour into the root overlay. Marks the tour as seen
+  /// when the user finishes or skips it.
+  void _startTour() {
+    if (!mounted || _tourEntry != null) return;
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final entry = OverlayEntry(
+      builder: (_) => HomeTour(
+        steps: [
+          const TourStep(
+            title: 'Welcome to ClassTrack 👋',
+            body:
+                "Here's a quick 20-second tour of the essentials. You can skip "
+                'anytime.',
+            icon: Icons.waving_hand_rounded,
+          ),
+          TourStep(
+            key: _navKey,
+            title: 'Move around',
+            body:
+                'Switch between Home, Schedule, Tasks and Attendance from this '
+                'bar — it stays with you everywhere.',
+            icon: Icons.dashboard_rounded,
+          ),
+          TourStep(
+            key: _fabKey,
+            title: 'Add anything, fast',
+            body:
+                'Tap + to quickly add a task, class, event, exam, grade, note, '
+                'habit or expense.',
+            icon: Icons.add_circle_rounded,
+            circle: true,
+          ),
+        ],
+        onFinish: _finishTour,
+      ),
+    );
+    _tourEntry = entry;
+    overlay.insert(entry);
+  }
+
+  void _finishTour() {
+    _tourEntry?.remove();
+    _tourEntry = null;
+    ref.read(homeTourDoneProvider.notifier).complete();
+  }
+
+  /// Listens for URLs/text shared into ClassTrack (Android/iOS share sheet) and
+  /// opens the editable "New item" sheet. Mobile-only; guarded so web/desktop
+  /// or a plugin hiccup can never crash the shell.
+  void _initShareIntake() {
+    if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
+    try {
+      _shareSub = ReceiveSharingIntent.instance
+          .getMediaStream()
+          .listen(_onShared, onError: (_) {});
+      // Handle a share that cold-started the app.
+      ReceiveSharingIntent.instance.getInitialMedia().then((files) {
+        if (files.isNotEmpty) {
+          _onShared(files);
+          ReceiveSharingIntent.instance.reset();
+        }
+      }).catchError((_) {});
+    } catch (_) {
+      // Platform channel unavailable — ignore, sharing is a bonus path.
+    }
+  }
+
+  /// Opens the pre-filled "New item" sheet for the first text/URL item shared.
+  void _onShared(List<SharedMediaFile> files) {
+    if (files.isEmpty || !mounted || _handlingShare) return;
+    final shared = files.firstWhere(
+      (f) => f.type == SharedMediaType.text || f.type == SharedMediaType.url,
+      orElse: () => files.first,
+    );
+    final text = shared.path.trim();
+    if (text.isEmpty) return;
+    _handlingShare = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) {
+        _handlingShare = false;
+        return;
+      }
+      try {
+        await openSharedLinkEditor(context, text);
+      } finally {
+        _handlingShare = false;
+      }
+    });
   }
 
   @override
   void dispose() {
+    _tourEntry?.remove();
+    _tourEntry = null;
+    _shareSub?.cancel();
     NotificationService.selectedPayload.removeListener(_onNotificationPayload);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -246,6 +394,43 @@ class _HomeShellState extends ConsumerState<HomeShell>
   void _onNotificationPayload() {
     final payload = NotificationService.selectedPayload.value;
     if (payload == null) return;
+
+    // Attendance check-in: a Present/Absent action was tapped. Mark that class
+    // occurrence (today) and confirm with a snackbar.
+    final mark = NotificationService.parseAttendanceMark(payload);
+    if (mark != null) {
+      NotificationService.selectedPayload.value = null;
+      final status = mark.status == 'present'
+          ? AttendanceStatus.present
+          : AttendanceStatus.absent;
+      ref.read(attendanceControllerProvider).setForOccurrence(
+            mark.subjectId,
+            DateTime.now(),
+            mark.slot,
+            status,
+          );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final name = ref.read(subjectsByIdProvider)[mark.subjectId]?.name;
+        final label = name != null && name.isNotEmpty ? ' for $name' : '';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(status == AttendanceStatus.present
+                ? 'Marked present$label ✅'
+                : 'Marked absent$label'),
+          ),
+        );
+        setState(() => _index = 3); // Attendance tab
+      });
+      return;
+    }
+
+    // Plain tap on the check-in notification → open the Attendance tab to mark.
+    if (payload.startsWith('${NotificationService.attendanceCheckInPrefix}|')) {
+      NotificationService.selectedPayload.value = null;
+      if (mounted) setState(() => _index = 3);
+      return;
+    }
 
     if (payload == NotificationService.dailyAgendaPayload) {
       NotificationService.selectedPayload.value = null;
@@ -280,6 +465,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   Widget build(BuildContext context) {
+    // Replay support: when the tour is re-armed from Settings (flag flips back
+    // to false), show it again.
+    ref.listen<bool>(homeTourDoneProvider, (prev, next) {
+      if (next == false && _tourEntry == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _startTour());
+      }
+    });
     // Keep task + exam reminders in sync with the latest data (no-op unless
     // the user has enabled reminders from Settings).
     ref.watch(reminderSyncProvider);
@@ -288,11 +480,17 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // Keep the home-screen widget's "today" snapshot fresh.
     ref.watch(homeWidgetSyncProvider);
     return PopScope(
-      // On non-Home tabs, the mobile back button returns to Home instead of
-      // leaving the app. On Home, back exits as usual.
-      canPop: _index == 0,
+      // Never let the root route be popped into an empty Navigator (which shows
+      // a blank/black screen). On non-Home tabs the back button returns to
+      // Home; on Home it backgrounds/exits the app via the platform.
+      canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _index != 0) setState(() => _index = 0);
+        if (didPop) return;
+        if (_index != 0) {
+          setState(() => _index = 0);
+        } else {
+          SystemNavigator.pop();
+        }
       },
       child: Scaffold(
         extendBody: true,
@@ -308,8 +506,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
         ),
         floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
         floatingActionButton:
-            _CenterFab(onTap: () => showQuickAddSheet(context)),
+            _CenterFab(key: _fabKey, onTap: () => showQuickAddSheet(context)),
         bottomNavigationBar: _FloatingNavBar(
+          key: _navKey,
           index: _index,
           onSelect: (i) {
             if (i != _index) {
@@ -326,7 +525,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
 class _CenterFab extends StatefulWidget {
   final VoidCallback onTap;
-  const _CenterFab({required this.onTap});
+  const _CenterFab({super.key, required this.onTap});
 
   @override
   State<_CenterFab> createState() => _CenterFabState();
@@ -399,7 +598,7 @@ class _CenterFabState extends State<_CenterFab>
 class _FloatingNavBar extends StatelessWidget {
   final int index;
   final ValueChanged<int> onSelect;
-  const _FloatingNavBar({required this.index, required this.onSelect});
+  const _FloatingNavBar({super.key, required this.index, required this.onSelect});
 
   @override
   Widget build(BuildContext context) {

@@ -38,6 +38,32 @@ fun bumpCompileSdk(project: Project) {
             // setter isn't available; the build will surface any issue.
         }
     }
+
+    // Align the plugin's Java compile target with the Kotlin target forced
+    // below (17). AGP derives the JavaCompile task target from the android
+    // extension's `compileOptions`, so a task-level override alone is undone;
+    // set the extension's source/target compatibility reflectively. Some older
+    // plugins (e.g. receive_sharing_intent 1.8.x, file_picker) default Java to
+    // 11, which then mismatches Kotlin 17 and fails the AGP consistency check.
+    try {
+        val compileOptions =
+            android.javaClass.getMethod("getCompileOptions").invoke(android)
+        val v17 = JavaVersion.VERSION_17
+        compileOptions.javaClass.methods
+            .firstOrNull {
+                it.name == "setSourceCompatibility" &&
+                    it.parameterTypes.firstOrNull() == JavaVersion::class.java
+            }
+            ?.invoke(compileOptions, v17)
+        compileOptions.javaClass.methods
+            .firstOrNull {
+                it.name == "setTargetCompatibility" &&
+                    it.parameterTypes.firstOrNull() == JavaVersion::class.java
+            }
+            ?.invoke(compileOptions, v17)
+    } catch (e: Exception) {
+        // Non-fatal: fall back to the task-level Java target set below.
+    }
 }
 
 subprojects {
@@ -60,6 +86,19 @@ subprojects {
     tasks.withType<org.gradle.api.tasks.compile.JavaCompile>().configureEach {
         sourceCompatibility = JavaVersion.VERSION_17.toString()
         targetCompatibility = JavaVersion.VERSION_17.toString()
+    }
+}
+
+// Some third-party plugins (e.g. receive_sharing_intent 1.8.x) ship an older
+// Gradle config whose Kotlin compile task ends up on a different JVM target
+// than the Java one, which AGP 9 / Kotlin 2.x rejects with "Inconsistent JVM
+// Target Compatibility". Pin every subproject's Kotlin compilation to 17 to
+// match the Java target set above.
+subprojects {
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
 }
 

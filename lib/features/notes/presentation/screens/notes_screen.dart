@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/models/checklist_item.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../core/utils/url_launcher_util.dart';
+import '../../../../shared/widgets/feature_tip_banner.dart';
 import '../../../../shared/widgets/states.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
@@ -95,6 +97,10 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                   _AddButton(onTap: () => NotesScreen._openEditor(context)),
                 ],
               ),
+            ),
+            const FeatureTipBanner(
+              prefsKey: AppConstants.prefsTipNotes,
+              message: 'You can create flashcards from your notes.',
             ),
             if (total > 0)
               Padding(

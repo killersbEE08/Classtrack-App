@@ -26,7 +26,7 @@ void main() {
     endDate: DateTime(2026, 8, 30), // runs "till 30 Aug"
   );
 
-  final mondaySession = ClassSession(
+  const mondaySession = ClassSession(
     id: 'mon',
     subjectId: subjectId,
     recurring: true,
@@ -34,7 +34,7 @@ void main() {
     startTime: '09:00',
     endTime: '10:00',
   );
-  final fridaySession = ClassSession(
+  const fridaySession = ClassSession(
     id: 'fri',
     subjectId: subjectId,
     recurring: true,

@@ -6,6 +6,7 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../shared/widgets/buttons.dart';
 import '../../domain/parsed_schedule.dart';
+import '../../data/import_repository.dart';
 import '../providers/import_providers.dart';
 
 /// Editable review of the Gemini-parsed schedule. Nothing is written to
@@ -39,10 +40,10 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     if (repo == null) return;
     setState(() => _saving = true);
     try {
-      final count = await repo.commit(_schedule);
+      final result = await repo.commit(_schedule);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added $count subject(s) to ClassTrack.')),
+        SnackBar(content: Text(_summaryMessage(result))),
       );
       Navigator.of(context).pop();
     } catch (e) {
@@ -53,6 +54,23 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  String _summaryMessage(ImportResult r) {
+    if (r.total == 0) {
+      return 'Nothing new to add — already up to date.';
+    }
+    final parts = <String>[];
+    if (r.subjects > 0) {
+      parts.add('${r.subjects} subject${r.subjects == 1 ? '' : 's'}');
+    }
+    if (r.sessions > 0) {
+      parts.add('${r.sessions} class${r.sessions == 1 ? '' : 'es'}');
+    }
+    if (r.tasks > 0) {
+      parts.add('${r.tasks} task${r.tasks == 1 ? '' : 's'}');
+    }
+    return 'Added ${parts.join(', ')} to ClassTrack.';
   }
 
   Future<void> _editSession(ParsedSubject subject, ParsedSession session) async {
@@ -120,7 +138,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: _confidenceColor().withOpacity(0.1),
+              color: _confidenceColor().withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(14),
             ),
             child: Row(
@@ -142,6 +160,20 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
             final subject = entry.value;
             return _subjectCard(theme, subject, entry.key);
           }),
+          if (_schedule.tasks.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text('Tasks & deadlines', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'One-off items detected as assignments — added to your Tasks, '
+              'not attendance.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 10),
+            ..._schedule.tasks.asMap().entries.map(
+                  (e) => _taskCard(theme, e.value, e.key),
+                ),
+          ],
         ],
       ),
       bottomNavigationBar: SafeArea(
@@ -153,6 +185,43 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
             icon: Icons.check_rounded,
             onPressed: _commit,
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _taskCard(ThemeData theme, ParsedTask task, int index) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: Row(
+          children: [
+            Checkbox(
+              value: task.include,
+              onChanged: (v) => setState(() => task.include = v ?? true),
+            ),
+            Expanded(
+              child: TextFormField(
+                initialValue: task.title,
+                style: theme.textTheme.titleMedium,
+                decoration: InputDecoration(
+                  isDense: true,
+                  border: InputBorder.none,
+                  hintText: 'Task title',
+                  helperText: task.due == null
+                      ? 'No due date'
+                      : 'Due ${DateUtilsX.prettyDate(task.due!)}',
+                ),
+                onChanged: (v) => task.title = v,
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.delete_outline_rounded,
+                  color: AppColors.danger),
+              onPressed: () => setState(() => _schedule.tasks.removeAt(index)),
+            ),
+          ],
         ),
       ),
     );
@@ -253,8 +322,9 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                 contentPadding: EdgeInsets.zero,
                 dense: true,
                 leading: const Icon(Icons.schedule_rounded, size: 20),
-                title: Text(
-                    '${session.day}  ·  ${session.start}–${session.end}'),
+                title: Text(session.date != null
+                    ? '${DateUtilsX.prettyDate(session.date!)}  ·  ${session.start}–${session.end}'
+                    : '${session.day}  ·  ${session.start}–${session.end}'),
                 subtitle: session.room != null && session.room!.isNotEmpty
                     ? Text('Room ${session.room}')
                     : null,
@@ -336,7 +406,7 @@ class _SessionEditorState extends State<_SessionEditor> {
           Text('Edit session', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 16),
           DropdownButtonFormField<String>(
-            value: Weekdays.full.contains(_day) ? _day : 'Monday',
+            initialValue: Weekdays.full.contains(_day) ? _day : 'Monday',
             decoration: const InputDecoration(labelText: 'Day'),
             items: Weekdays.full
                 .map((d) => DropdownMenuItem(value: d, child: Text(d)))

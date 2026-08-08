@@ -107,4 +107,25 @@ class GeminiService {
   static String stripActionsBlock(String reply) => reply
       .replaceAll(RegExp(r'```actions[\s\S]*?```', multiLine: true), '')
       .trim();
+
+  /// Removes ANY remaining fenced code block (```lang … ```), so raw JSON or
+  /// script the model sometimes echoes alongside its actions — e.g. a
+  /// ```json duplicate of the delete list — never shows in the plain-text chat
+  /// bubble. (The functional `actions`/`schedule` blocks are extracted from the
+  /// original reply beforehand, so removing them here only affects display.)
+  static String stripAllCodeFences(String reply) => reply
+      .replaceAll(RegExp(r'```[\s\S]*?```', multiLine: true), '')
+      // A trailing, unclosed fence (truncated response) — drop from the fence
+      // marker to the end so a half-printed code block can't leak through.
+      .replaceAll(RegExp(r'```[a-zA-Z]*[\s\S]*$'), '')
+      .trim();
+
+  /// Removes a bare (unfenced) actions/schedule JSON object the model sometimes
+  /// writes straight into the prose, e.g. `{ "actions": [ … ] }`.
+  static String stripBareActionsJson(String reply) => reply
+      .replaceAll(
+          RegExp(r'\{\s*"(actions|subjects|schedule)"\s*:[\s\S]*\}',
+              multiLine: true),
+          '')
+      .trim();
 }

@@ -110,7 +110,7 @@ class ExportService {
               crossAxisAlignment: pw.CrossAxisAlignment.start,
               children: [
                 pw.Text('ClassTrack — Attendance Summary',
-                    style: pw.TextStyle(
+                    style: const pw.TextStyle(
                         fontSize: 22, fontWeight: pw.FontWeight.bold)),
                 pw.SizedBox(height: 4),
                 pw.Text(
@@ -132,7 +132,7 @@ class ExportService {
               mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
               children: [
                 pw.Text('Overall attendance',
-                    style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+                    style: const pw.TextStyle(fontWeight: pw.FontWeight.bold)),
                 pw.Text(
                   total.held == 0
                       ? '—'
@@ -154,7 +154,7 @@ class ExportService {
                 .skip(1)
                 .map((r) => r.map((e) => e.toString()).toList())
                 .toList(),
-            headerStyle: pw.TextStyle(
+            headerStyle: const pw.TextStyle(
                 fontWeight: pw.FontWeight.bold, color: PdfColors.white),
             headerDecoration:
                 const pw.BoxDecoration(color: PdfColors.indigo),

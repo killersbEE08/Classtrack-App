@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/validators.dart';
 
 /// App-level user profile stored at users/{uid}.
 class AppUser {
@@ -82,9 +83,13 @@ class AppUser {
       };
 
   factory AppUser.fromMap(String uid, Map<String, dynamic> map) {
+    final rawName = map['displayName'] as String?;
+    // Sanitize on read too, so any name written before this guard existed (or
+    // by a future path that forgot to) can never render as HTML downstream.
+    final cleanName = rawName == null ? null : Validators.sanitizeName(rawName);
     return AppUser(
       uid: uid,
-      displayName: map['displayName'] as String?,
+      displayName: (cleanName == null || cleanName.isEmpty) ? null : cleanName,
       email: map['email'] as String?,
       photoUrl: map['photoUrl'] as String?,
       targetAttendancePercent:

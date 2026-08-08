@@ -6,12 +6,19 @@ import 'package:classtrack/core/theme/app_icons.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../subscription/presentation/providers/subscription_providers.dart';
 import '../../../subscription/presentation/screens/paywall_screen.dart';
+import '../../../tips/domain/discoverable_feature.dart';
+import '../../../tips/presentation/providers/tips_providers.dart';
 import '../../domain/parsed_schedule.dart';
 import '../providers/import_providers.dart';
 import 'review_screen.dart';
 
 class ImportScreen extends ConsumerStatefulWidget {
-  const ImportScreen({super.key});
+  /// When true, the AI photo/PDF/text import is offered free of charge and the
+  /// Pro paywall is skipped. Used by the Attendance tab, where uploading a
+  /// timetable photo is a free onboarding path for new students.
+  final bool freeAccess;
+
+  const ImportScreen({super.key, this.freeAccess = false});
 
   @override
   ConsumerState<ImportScreen> createState() => _ImportScreenState();
@@ -42,9 +49,11 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
       _fail('The AI assistant isn’t available right now. Please try again later.');
       return;
     }
-    // AI photo/PDF/text import is a Pro feature. Free users can still build a
-    // timetable manually or via the chat assistant's monthly free messages.
-    if (!ref.read(isProProvider)) {
+    // AI photo/PDF/text import is normally a Pro feature. Free users can still
+    // build a timetable manually or via the chat assistant's monthly free
+    // messages. When [freeAccess] is set (e.g. launched from the Attendance
+    // tab) the paywall is skipped so photo upload is free.
+    if (!widget.freeAccess && !ref.read(isProProvider)) {
       final becamePro = await showPaywall(context);
       if (!becamePro || !mounted) return;
     }
@@ -56,6 +65,8 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
         _fail('Couldn’t find any classes. Try a clearer image or paste text.');
         return;
       }
+      // Feature discovery: photo/AI timetable import has now been tried.
+      ref.read(featureUsageProvider.notifier).markUsed(FeatureId.photoImport);
       Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => ReviewScreen(schedule: result)),
       );
@@ -95,7 +106,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: AppColors.accent.withOpacity(0.1),
+                color: AppColors.accent.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(18),
               ),
               child: Row(
@@ -105,7 +116,10 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Upload a timetable photo or paste text. You’ll review everything before it’s saved.',
+                      widget.freeAccess
+                          ? 'Upload a timetable photo or paste text — free. '
+                              'You’ll review everything before it’s saved.'
+                          : 'Upload a timetable photo or paste text. You’ll review everything before it’s saved.',
                       style: theme.textTheme.bodyMedium,
                     ),
                   ),
@@ -181,7 +195,7 @@ class _ImportScreenState extends ConsumerState<ImportScreen> {
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: AppColors.primary.withOpacity(0.1),
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.1),
                   child: Icon(icon, color: AppColors.primary),
                 ),
                 const SizedBox(width: 14),

@@ -53,7 +53,7 @@ class DailyAgendaPdf {
         padding: const pw.EdgeInsets.only(top: 18, bottom: 8),
         child: pw.Text(
           _ascii(text),
-          style: pw.TextStyle(
+          style: const pw.TextStyle(
             fontSize: 13,
             fontWeight: pw.FontWeight.bold,
             color: _accent,
@@ -80,7 +80,7 @@ class DailyAgendaPdf {
                   children: [
                     pw.TextSpan(
                       text: _ascii(l.title),
-                      style: pw.TextStyle(
+                      style: const pw.TextStyle(
                           fontSize: 11, fontWeight: pw.FontWeight.bold),
                     ),
                     if (l.detail.trim().isNotEmpty)
@@ -162,7 +162,7 @@ class DailyAgendaPdf {
           crossAxisAlignment: pw.CrossAxisAlignment.start,
           children: [
             pw.Text(_ascii(title),
-                style: pw.TextStyle(
+                style: const pw.TextStyle(
                     fontSize: 24,
                     fontWeight: pw.FontWeight.bold,
                     color: PdfColors.white)),
@@ -291,7 +291,7 @@ class DailyAgendaPdf {
               padding: const pw.EdgeInsets.only(top: 8, bottom: 4),
               child: pw.Text(
                 _ascii(DateFormat('EEEE, d MMM').format(d.date)),
-                style: pw.TextStyle(
+                style: const pw.TextStyle(
                     fontSize: 11,
                     fontWeight: pw.FontWeight.bold,
                     color: PdfColors.grey800),

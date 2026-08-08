@@ -27,8 +27,8 @@ class ProFeatures {
     ),
     ProFeature(
       Icons.document_scanner_rounded,
-      'AI timetable & photo import',
-      'Snap a photo or upload a PDF and let AI build your schedule instantly.',
+      'Unlimited AI timetable import',
+      'Import as many timetables as you like — snap a photo, upload a PDF or paste text and let AI build your schedule. (New students get one free scan during first-time setup, before adding any subjects.)',
     ),
     ProFeature(
       Icons.insights_rounded,

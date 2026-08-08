@@ -72,7 +72,7 @@ final todayStatusProvider = Provider<Map<String, AttendanceStatus>>((ref) {
   for (final s in subjects) {
     final records =
         ref.watch(attendanceForSubjectProvider(s.id)).valueOrNull ?? const [];
-    for (final r in records) {
+    for (final r in dedupeAttendanceRecords(records)) {
       if (r.dateId == todayId && r.status != AttendanceStatus.unmarked) {
         map[attendanceOccurrenceKey(s.id, r.slot)] = r.status;
       }
@@ -92,7 +92,7 @@ final weeklyAttendanceProvider = Provider<AttendanceStats>((ref) {
   for (final s in subjects) {
     final records =
         ref.watch(attendanceForSubjectProvider(s.id)).valueOrNull ?? const [];
-    for (final r in records) {
+    for (final r in dedupeAttendanceRecords(records)) {
       if (r.date.isBefore(weekStart)) continue;
       switch (r.status) {
         case AttendanceStatus.present:

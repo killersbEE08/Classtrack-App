@@ -1,7 +1,7 @@
 name: classtrack
 description: "ClassTrack — Attendance & class schedule tracker with Gemini AI import."
 publish_to: "none"
-version: 1.0.16+18
+version: 1.0.23+25
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
@@ -52,6 +52,12 @@ dependencies:
   share_plus: ^10.1.4
   path_provider: ^2.1.4
   url_launcher: ^6.3.0
+
+  # Receive links/text shared TO ClassTrack via the Android/iOS share sheet.
+  # Used to open the editable "New item" sheet pre-filled with the shared URL.
+  # Pinned to 1.8.1: 1.9.0 hard-codes compileSdk 37 (a preview platform) which
+  # fails the Android build against the stable SDK this project targets.
+  receive_sharing_intent: 1.8.1
 
   # Export
   pdf: ^3.11.1

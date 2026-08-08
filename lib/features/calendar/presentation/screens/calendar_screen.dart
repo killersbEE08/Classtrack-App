@@ -4,8 +4,10 @@ import 'package:table_calendar/table_calendar.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/subject_icons.dart';
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../services/reminder_scheduler.dart';
+import '../../../../shared/widgets/feature_tip_banner.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../../exams/domain/exam.dart';
 import '../../../exams/presentation/providers/exam_providers.dart';
@@ -81,6 +83,11 @@ class _CalendarScreenState extends ConsumerState<CalendarScreen> {
               ],
             ),
             const SizedBox(height: 8),
+            const FeatureTipBanner(
+              prefsKey: AppConstants.prefsTipCalendar,
+              message: 'Import your Google Calendar in one tap.',
+              padding: EdgeInsets.only(bottom: 8),
+            ),
             const RemindersBanner(),
             Container(
               padding: const EdgeInsets.all(8),

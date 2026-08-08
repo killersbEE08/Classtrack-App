@@ -23,6 +23,7 @@ import '../../../subscription/domain/pro_constants.dart';
 import '../../../subscription/presentation/providers/subscription_providers.dart';
 import '../../../subscription/presentation/screens/paywall_screen.dart';
 import '../../../subscription/presentation/screens/pro_status_screen.dart';
+import '../../../tips/presentation/screens/tips_screen.dart';
 import 'privacy_policy_screen.dart';
 
 class SettingsScreen extends ConsumerWidget {
@@ -100,7 +101,7 @@ class SettingsScreen extends ConsumerWidget {
                   leading: const Icon(Icons.card_giftcard_rounded,
                       color: AppColors.primary),
                   title: const Text('Invite friends & earn Pro'),
-                  subtitle: Text(
+                  subtitle: const Text(
                       'You both get ${AppConstants.referralRewardDays} days of Pro free'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -289,6 +290,34 @@ class SettingsScreen extends ConsumerWidget {
                   title: const Text('Help & support'),
                   trailing: const Icon(Icons.open_in_new_rounded),
                   onTap: () => _openUrl(AppConstants.supportUrl),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.tour_rounded,
+                      color: AppColors.primary),
+                  title: const Text('Show app tour'),
+                  subtitle: const Text('Replay the quick home walkthrough'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    // Re-arm the tour, then return to the Home shell so it can
+                    // play over the real nav bar and quick-add button.
+                    final tour = ref.read(homeTourDoneProvider.notifier);
+                    Navigator.of(context).popUntil((r) => r.isFirst);
+                    tour.reset();
+                  },
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.tips_and_updates_rounded,
+                      color: AppColors.primary),
+                  title: const Text('Tips & Tricks'),
+                  subtitle:
+                      const Text('See which features you haven’t tried yet'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const TipsScreen())),
                 ),
                 const Divider(height: 1),
                 ListTile(
@@ -655,6 +684,14 @@ class SettingsScreen extends ConsumerWidget {
           _switchTile(theme, 'Class reminders', prefs.classes,
               (v) => ctrl.setCategory(classes: v)),
           const Divider(height: 1),
+          _switchTile(
+            theme,
+            'Attendance check-ins',
+            prefs.attendanceCheckIns,
+            (v) => ctrl.setCategory(attendanceCheckIns: v),
+            subtitle: 'After each class, tap Present/Absent to mark it',
+          ),
+          const Divider(height: 1),
           _switchTile(theme, 'Task & deadline reminders', prefs.tasks,
               (v) => ctrl.setCategory(tasks: v)),
           const Divider(height: 1),
@@ -703,10 +740,12 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Widget _switchTile(
-      ThemeData theme, String title, bool value, ValueChanged<bool> onChanged) {
+      ThemeData theme, String title, bool value, ValueChanged<bool> onChanged,
+      {String? subtitle}) {
     return SwitchListTile(
       contentPadding: EdgeInsets.zero,
       title: Text(title),
+      subtitle: subtitle != null ? Text(subtitle) : null,
       value: value,
       onChanged: onChanged,
     );
