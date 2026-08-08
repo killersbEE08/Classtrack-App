@@ -29,6 +29,10 @@ lib/firebase_options.dart
 functions/.env
 functions/node_modules/
 functions/.runtimeconfig.json
+# Service-account key + one-off admin script (bootstrap only) — NEVER COMMIT
+serviceAccount.json
+functions/serviceAccount.json
+functions/setAdmin.mjs
 .firebase/
 *.keystore
 key.properties
