@@ -27,6 +27,7 @@ import '../../../habits/presentation/screens/habits_screen.dart';
 import '../../../moments/presentation/screens/moments_screen.dart';
 import '../../../notes/presentation/screens/notes_screen.dart';
 import '../../../opportunities/presentation/providers/opportunities_providers.dart';
+import '../../../opportunities/presentation/screens/discounts_screen.dart';
 import '../../../opportunities/presentation/screens/opportunities_screen.dart';
 import '../../../opportunities/presentation/screens/resource_detail_screen.dart';
 import '../../../opportunities/presentation/widgets/resource_card.dart';
@@ -1059,6 +1060,8 @@ class _QuickTools extends ConsumerWidget {
     final tools = <_Tool>[
       _Tool('Tasks', Icons.check_circle_outline_rounded, AppColors.success,
           () => go(const TasksScreen())),
+      _Tool('Discounts', Icons.local_offer_rounded, AppColors.success,
+          () => go(const DiscountsScreen())),
       _Tool('Grades', Icons.school_rounded, AppColors.primary,
           () => go(const GradesScreen())),
       _Tool('Exams', Icons.event_note_rounded, AppColors.danger,

@@ -10,6 +10,7 @@ import '../../domain/resource.dart';
 import '../../domain/resource_type.dart';
 import '../providers/opportunities_providers.dart';
 import '../widgets/resource_card.dart';
+import 'discounts_screen.dart';
 import 'resource_detail_screen.dart';
 import 'saved_opportunities_screen.dart';
 
@@ -60,6 +61,12 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
                   Expanded(
                     child: Text('Opportunities',
                         style: theme.textTheme.displaySmall),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.local_offer_outlined),
+                    tooltip: 'Student discounts',
+                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => const DiscountsScreen())),
                   ),
                   IconButton(
                     icon: const Icon(Icons.bookmark_border_rounded),
