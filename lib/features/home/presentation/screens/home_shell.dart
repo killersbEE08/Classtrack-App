@@ -259,15 +259,21 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _onNotificationPayload());
     _initShareIntake();
-    // Show the first-run home tour once the shell has settled (after entrance
-    // animations), if it hasn't been seen yet. Returning users who are 7+ days
-    // in (tour already done) instead get the one-off Tips & Tricks nudge.
+    // NOTE: The first-run coach-mark tour is NO LONGER auto-launched on
+    // startup. On some devices/renderers (e.g. Impeller/Vulkan) the root
+    // overlay could fail to lay out and leave a full-screen scrim that blocked
+    // all input on Home. To guarantee the app is always usable on launch we
+    // mark the tour as seen instead; users can still replay it on demand from
+    // Settings → "Show app tour" (which flips the flag and starts it via the
+    // listener in build()).
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!ref.read(homeTourDoneProvider)) {
+        ref.read(homeTourDoneProvider.notifier).complete();
+      }
       Future.delayed(const Duration(milliseconds: 700), () {
         if (!mounted) return;
-        if (!ref.read(homeTourDoneProvider)) {
-          _startTour();
-        } else if (ref.read(shouldShowTipsPromptProvider)) {
+        if (ref.read(shouldShowTipsPromptProvider)) {
           _showTipsPrompt();
         }
       });

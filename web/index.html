@@ -100,6 +100,27 @@
       document.body.style.background = "transparent";
     }
   </script>
+  <script id="sw-self-heal">
+    // The web build (ClassTracks CMS) is an always-online tool. Proactively
+    // remove any previously-installed Flutter service worker and cached bundle
+    // so a stale build can never keep serving after a deploy. Combined with the
+    // no-cache Hosting headers and a service-worker-free build, this guarantees
+    // the CMS always loads the latest version and self-heals older clients.
+    (function () {
+      try {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations()
+            .then(function (regs) { regs.forEach(function (r) { r.unregister(); }); })
+            .catch(function () {});
+        }
+        if (window.caches && caches.keys) {
+          caches.keys()
+            .then(function (keys) { keys.forEach(function (k) { caches.delete(k); }); })
+            .catch(function () {});
+        }
+      } catch (e) { /* best-effort */ }
+    })();
+  </script>
   <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
 </head>
 <body>
