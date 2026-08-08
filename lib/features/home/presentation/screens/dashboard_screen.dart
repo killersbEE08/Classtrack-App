@@ -26,7 +26,10 @@ import '../../../grades/presentation/screens/grades_screen.dart';
 import '../../../habits/presentation/screens/habits_screen.dart';
 import '../../../moments/presentation/screens/moments_screen.dart';
 import '../../../notes/presentation/screens/notes_screen.dart';
+import '../../../opportunities/presentation/providers/opportunities_providers.dart';
 import '../../../opportunities/presentation/screens/opportunities_screen.dart';
+import '../../../opportunities/presentation/screens/resource_detail_screen.dart';
+import '../../../opportunities/presentation/widgets/resource_card.dart';
 import '../../../schedule/presentation/providers/schedule_providers.dart';
 import '../../../schedule/presentation/screens/schedule_screen.dart';
 import '../../../settings/presentation/screens/settings_screen.dart';
@@ -965,6 +968,8 @@ class _RecommendedForYou extends ConsumerWidget {
     final theme = Theme.of(context);
     final profile = ref.watch(userProfileProvider).valueOrNull;
     final hasDetails = profile?.hasAnyProfileDetails ?? false;
+    final feed = ref.watch(opportunitiesFeedProvider);
+    final top = feed.isNotEmpty ? feed.first : null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -977,57 +982,64 @@ class _RecommendedForYou extends ConsumerWidget {
               MaterialPageRoute(builder: (_) => const OpportunitiesScreen())),
         ),
         const SizedBox(height: 12),
-        GestureDetector(
-          onTap: () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => hasDetails
-                  ? const OpportunitiesScreen()
-                  : const EditProfileScreen())),
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: softCard(context),
-            child: Row(
-              children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Icon(
-                      hasDetails
-                          ? Icons.workspace_premium_rounded
-                          : Icons.person_add_alt_1_rounded,
-                      color: AppColors.primary),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                          hasDetails
-                              ? 'Personalised opportunities'
-                              : 'Get matched opportunities',
-                          style: theme.textTheme.titleMedium),
-                      const SizedBox(height: 3),
-                      Text(
+        if (top != null)
+          ResourceCard(
+            resource: top,
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => ResourceDetailScreen(resource: top))),
+          )
+        else
+          GestureDetector(
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => hasDetails
+                    ? const OpportunitiesScreen()
+                    : const EditProfileScreen())),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: softCard(context),
+              child: Row(
+                children: [
+                  Container(
+                    width: 52,
+                    height: 52,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Icon(
                         hasDetails
-                            ? 'Scholarships, internships & deals picked for you — coming soon.'
-                            : 'Add your country, degree & interests to unlock personalised matches.',
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: theme.hintColor),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ],
+                            ? Icons.workspace_premium_rounded
+                            : Icons.person_add_alt_1_rounded,
+                        color: AppColors.primary),
                   ),
-                ),
-                const Icon(Icons.chevron_right_rounded),
-              ],
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                            hasDetails
+                                ? 'Personalised opportunities'
+                                : 'Get matched opportunities',
+                            style: theme.textTheme.titleMedium),
+                        const SizedBox(height: 3),
+                        Text(
+                          hasDetails
+                              ? 'Scholarships, internships & deals picked for you — coming soon.'
+                              : 'Add your country, degree & interests to unlock personalised matches.',
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.hintColor),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.chevron_right_rounded),
+                ],
+              ),
             ),
           ),
-        ),
       ],
     );
   }
