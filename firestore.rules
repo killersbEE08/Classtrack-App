@@ -3,6 +3,28 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── Helpers ──────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    // CMS role from a custom claim set by the backend (never client-settable).
+    function role() {
+      return isSignedIn() && request.auth.token.role is string
+        ? request.auth.token.role
+        : 'none';
+    }
+    // Roles allowed to author opportunities/discounts content (PRD §28).
+    function canEditContent() {
+      return role() in ['super_admin', 'admin', 'editor'];
+    }
+    // Roles allowed to manage banners & sponsored campaigns.
+    function canManageMarketing() {
+      return role() in ['super_admin', 'admin', 'marketing'];
+    }
+    function isAdmin() {
+      return role() in ['super_admin', 'admin'];
+    }
+
     // Everything under a user's tree is private to that user.
     match /users/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
@@ -10,6 +32,39 @@ service cloud.firestore {
       match /{document=**} {
         allow read, write: if request.auth != null && request.auth.uid == uid;
       }
+    }
+
+    // ── Unified opportunities/discounts content (PRD §7) ──────────────────
+    // Students may READ only content that is visible (not draft/hidden); the
+    // date-driven lifecycle is re-checked client-side. Editors+ may read all
+    // (incl. drafts) and are the ONLY writers — so a student can never modify
+    // status, sponsored, priority or any other field.
+    match /resources/{id} {
+      allow read: if canEditContent() ||
+        (isSignedIn() &&
+          !(resource.data.status in ['draft', 'hidden']));
+      allow write: if canEditContent();
+    }
+
+    // Marketing banners — read published ones; marketing roles manage.
+    match /banners/{id} {
+      allow read: if canManageMarketing() ||
+        (isSignedIn() && resource.data.published == true);
+      allow write: if canManageMarketing();
+    }
+
+    // Sponsored campaigns — read published ones; marketing roles manage.
+    match /campaigns/{id} {
+      allow read: if canManageMarketing() ||
+        (isSignedIn() && resource.data.published == true);
+      allow write: if canManageMarketing();
+    }
+
+    // Remotely-configurable app config (e.g. recommendation weights). Readable
+    // by any signed-in client; only admins may change it.
+    match /config/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
     }
 
     // Server-trusted Pro entitlement. The owner may READ their own flag (so the

@@ -34,6 +34,22 @@ class AppConstants {
   static const String attendanceCollection = 'attendance';
   static const String importJobsCollection = 'importJobs';
 
+  // Opportunities / unified Resource platform (Phase 2+).
+  // A single top-level collection backs scholarships, internships, discounts,
+  // hackathons, etc. — the `type` field discriminates. Content is authored by
+  // the CMS (Admin SDK / privileged roles); clients only ever read it.
+  static const String resourcesCollection = 'resources';
+  // Marketing banners shown on Home/Opportunities/Discounts (CMS-managed).
+  static const String bannersCollection = 'banners';
+  // Sponsored campaigns (CMS-managed).
+  static const String campaignsCollection = 'campaigns';
+  // Remotely-configurable app config (e.g. recommendation weights). Read-only
+  // for clients; a single well-known doc per concern.
+  static const String configCollection = 'config';
+  static const String recommendationConfigDoc = 'recommendation';
+  // Per-user saved/hidden opportunities: users/{uid}/savedResources/{id}.
+  static const String savedResourcesCollection = 'savedResources';
+
   // Cloud Function
   static const String parseScheduleFunction = 'parseSchedule';
   static const String getReferralInfoFunction = 'getReferralInfo';
