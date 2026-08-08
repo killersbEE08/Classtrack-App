@@ -1,14 +1,29 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/firebase_providers.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../data/resource_repository.dart';
+import '../../domain/recommendation_weights.dart';
 import '../../domain/resource.dart';
 import '../../domain/resource_type.dart';
 
 /// Read-only repository over the unified `resources` collection.
 final resourceRepositoryProvider = Provider<ResourceRepository>((ref) {
   return ResourceRepository(db: ref.watch(firestoreProvider));
+});
+
+/// Remotely-configurable recommendation weights (`config/recommendation`).
+/// Falls back to [RecommendationWeights.defaults] when unset. Shared by the CMS
+/// Settings editor and the personalization scoring (Phase 6).
+final recommendationWeightsProvider =
+    StreamProvider<RecommendationWeights>((ref) {
+  final db = ref.watch(firestoreProvider);
+  return db
+      .collection(AppConstants.configCollection)
+      .doc(AppConstants.recommendationConfigDoc)
+      .snapshots()
+      .map((s) => RecommendationWeights.fromMap(s.data()));
 });
 
 /// All student-visible resources (priority-ordered). Base stream that the

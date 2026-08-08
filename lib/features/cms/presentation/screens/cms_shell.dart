@@ -5,6 +5,7 @@ import '../../../../core/providers/firebase_providers.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/cms_role.dart';
 import '../providers/cms_auth_providers.dart';
+import 'cms_analytics_screen.dart';
 import 'cms_audit_logs_screen.dart';
 import 'cms_banners_screen.dart';
 import 'cms_campaigns_screen.dart';
@@ -12,6 +13,7 @@ import 'cms_dashboard_screen.dart';
 import 'cms_login_screen.dart';
 import 'cms_notifications_screen.dart';
 import 'cms_resources_screen.dart';
+import 'cms_settings_screen.dart';
 import 'cms_users_screen.dart';
 
 /// A CMS navigation section, gated by the current role's permissions.
@@ -65,7 +67,7 @@ final cmsSections = <CmsSection>[
     label: 'Analytics',
     icon: Icons.insights_rounded,
     visibleTo: (r) => r.canViewAnalytics,
-    build: (_) => const _Placeholder('Analytics'),
+    build: (_) => const CmsAnalyticsScreen(),
   ),
   CmsSection(
     label: 'Users',
@@ -83,7 +85,7 @@ final cmsSections = <CmsSection>[
     label: 'Settings',
     icon: Icons.settings_rounded,
     visibleTo: (r) => r.canEditConfig,
-    build: (_) => const _Placeholder('Settings'),
+    build: (_) => const CmsSettingsScreen(),
   ),
 ];
 
@@ -210,30 +212,6 @@ class _TopBar extends ConsumerWidget {
             onPressed: () =>
                 ref.read(cmsAuthControllerProvider.notifier).signOut(),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _Placeholder extends StatelessWidget {
-  final String title;
-  const _Placeholder(this.title);
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.construction_rounded, size: 48, color: theme.hintColor),
-          const SizedBox(height: 12),
-          Text(title, style: theme.textTheme.headlineSmall),
-          const SizedBox(height: 6),
-          Text('This module is coming next.',
-              style:
-                  theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor)),
         ],
       ),
     );
