@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/providers/firebase_providers.dart';
 import '../../data/cms_marketing_repository.dart';
+import '../../domain/cms_notification.dart';
 import '../../domain/marketing.dart';
 
 final cmsMarketingRepositoryProvider =
@@ -24,4 +25,10 @@ final cmsCampaignsProvider = StreamProvider<List<Campaign>>((ref) {
   final repo = ref.watch(cmsMarketingRepositoryProvider);
   if (repo == null) return Stream.value(const []);
   return repo.watchCampaigns();
+});
+
+final cmsNotificationsProvider = StreamProvider<List<CmsNotification>>((ref) {
+  final repo = ref.watch(cmsMarketingRepositoryProvider);
+  if (repo == null) return Stream.value(const []);
+  return repo.watchNotifications();
 });

@@ -10,6 +10,7 @@ import 'cms_banners_screen.dart';
 import 'cms_campaigns_screen.dart';
 import 'cms_dashboard_screen.dart';
 import 'cms_login_screen.dart';
+import 'cms_notifications_screen.dart';
 import 'cms_resources_screen.dart';
 import 'cms_users_screen.dart';
 
@@ -58,7 +59,7 @@ final cmsSections = <CmsSection>[
     label: 'Notifications',
     icon: Icons.notifications_active_rounded,
     visibleTo: (r) => r.canManageMarketing,
-    build: (_) => const _Placeholder('Notifications'),
+    build: (_) => const CmsNotificationsScreen(),
   ),
   CmsSection(
     label: 'Analytics',

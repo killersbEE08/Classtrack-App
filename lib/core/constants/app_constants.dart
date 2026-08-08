@@ -49,6 +49,8 @@ class AppConstants {
   static const String recommendationConfigDoc = 'recommendation';
   // Per-user saved/hidden opportunities: users/{uid}/savedResources/{id}.
   static const String savedResourcesCollection = 'savedResources';
+  // CMS-composed targeted notification queue (processed by a Cloud Function).
+  static const String notificationsCollection = 'notifications';
 
   // Cloud Function
   static const String parseScheduleFunction = 'parseSchedule';

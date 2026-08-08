@@ -84,6 +84,16 @@ service cloud.firestore {
       allow delete: if canManageMarketing();
     }
 
+    // Targeted-notification queue. Marketing composes (create) a queued doc;
+    // the backend (sendQueuedNotification trigger, Admin SDK) sends it and
+    // writes the lifecycle fields. Clients never update/delete.
+    match /notifications/{id} {
+      allow read: if canManageMarketing();
+      allow create: if canManageMarketing()
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow update, delete: if false;
+    }
+
     // Remotely-configurable app config (e.g. recommendation weights). Readable
     // by any signed-in client; only admins may change it.
     match /config/{doc} {

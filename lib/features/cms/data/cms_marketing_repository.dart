@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../domain/cms_notification.dart';
 import '../domain/marketing.dart';
 
 /// Write-capable access to `banners` and `campaigns`, used by the CMS marketing
@@ -76,4 +77,36 @@ class CmsMarketingRepository {
       }, SetOptions(merge: true));
 
   Future<void> deleteCampaign(String id) => _campaigns.doc(id).delete();
+
+  // ── Targeted notifications ───────────────────────────────────────────────
+  CollectionReference<Map<String, dynamic>> get _notifications =>
+      _db.collection(AppConstants.notificationsCollection);
+
+  Stream<List<CmsNotification>> watchNotifications({int limit = 100}) {
+    return _notifications
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((s) =>
+            s.docs.map((d) => CmsNotification.fromMap(d.id, d.data())).toList());
+  }
+
+  /// Enqueues a notification for the backend to deliver. `country` null/empty
+  /// or "Global" broadcasts to everyone.
+  Future<void> enqueueNotification({
+    required String title,
+    required String body,
+    String? country,
+    String? payload,
+  }) {
+    return _notifications.add({
+      'title': title,
+      'body': body,
+      'country': (country == null || country.trim().isEmpty) ? null : country,
+      'payload': (payload == null || payload.trim().isEmpty) ? null : payload,
+      'status': 'queued',
+      'updatedBy': editorUid,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
 }

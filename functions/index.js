@@ -10,12 +10,13 @@
  * shipped to the client.
  */
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
-import { onDocumentWritten } from "firebase-functions/v2/firestore";
+import { onDocumentWritten, onDocumentCreated } from "firebase-functions/v2/firestore";
 import { defineSecret } from "firebase-functions/params";
 import { initializeApp } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import { getMessaging } from "firebase-admin/messaging";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import {
   canAssignRole,
@@ -24,6 +25,7 @@ import {
   ROLE_RANK,
   buildAuditEntry,
 } from "./roles.js";
+import { topicForCountry, buildFcmMessage } from "./notifications.js";
 
 initializeApp();
 
@@ -973,3 +975,59 @@ function contentAuditTrigger(collection, targetType) {
 export const auditResourceWrite = contentAuditTrigger("resources", "resource");
 export const auditBannerWrite = contentAuditTrigger("banners", "banner");
 export const auditCampaignWrite = contentAuditTrigger("campaigns", "campaign");
+
+
+/**
+ * sendQueuedNotification — delivers a CMS-composed targeted notification.
+ *
+ * Marketing composes a notification in the CMS, which writes a `queued` doc to
+ * the `notifications` collection. This trigger publishes it to the appropriate
+ * FCM topic (country_<slug> or the `all` broadcast), records the result on the
+ * doc, and writes an audit entry. Clients can only CREATE these docs (rules);
+ * the lifecycle fields below are written by the Admin SDK here.
+ */
+export const sendQueuedNotification = onDocumentCreated(
+  "notifications/{id}",
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const d = snap.data() || {};
+    // Only process freshly-queued docs.
+    if (d.status && d.status !== "queued") return;
+
+    const topic = topicForCountry(d.country);
+    const message = buildFcmMessage({
+      title: d.title,
+      body: d.body,
+      topic,
+      data: { payload: d.payload || "" },
+    });
+
+    try {
+      const messageId = await getMessaging().send(message);
+      await snap.ref.set(
+        {
+          status: "sent",
+          topic,
+          messageId,
+          sentAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      await writeAudit({
+        actorUid: d.updatedBy || "unknown",
+        actorRole: "none",
+        action: "notification_sent",
+        targetType: "notification",
+        targetId: event.params.id,
+        details: { topic, title: d.title || "" },
+      });
+    } catch (e) {
+      console.error("notification send failed", e);
+      await snap.ref.set(
+        { status: "failed", error: String(e?.message || e) },
+        { merge: true }
+      );
+    }
+  }
+);
