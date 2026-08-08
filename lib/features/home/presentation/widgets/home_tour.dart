@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -99,6 +101,13 @@ class _HomeTourState extends State<HomeTour> {
   ) {
     final theme = Theme.of(context);
 
+    // A definite, bounded card width. Using a fixed width (rather than only a
+    // maxWidth) guarantees the button row's Spacer never sees an unbounded
+    // width — which previously threw "BoxConstraints forces an infinite width"
+    // and left the tour as an un-tappable dark scrim.
+    final double cardWidth =
+        math.min(size.width - 40.0, 420.0).clamp(0.0, size.width).toDouble();
+
     final card = _TourCard(
       icon: step.icon,
       title: step.title,
@@ -113,10 +122,7 @@ class _HomeTourState extends State<HomeTour> {
     // No target -> centered welcome card.
     if (hole == null) {
       return Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: card,
-        ),
+        child: SizedBox(width: cardWidth, child: card),
       );
     }
 
@@ -124,18 +130,17 @@ class _HomeTourState extends State<HomeTour> {
     final spaceAbove = hole.top;
     final spaceBelow = size.height - hole.bottom;
     final below = spaceBelow >= spaceAbove;
+    final double left =
+        ((size.width - cardWidth) / 2).clamp(0.0, size.width).toDouble();
 
     return Positioned(
-      left: 20,
-      right: 20,
+      left: left,
+      width: cardWidth,
       top: below ? hole.bottom + 16 : null,
       bottom: below ? null : size.height - hole.top + 16,
-      child: Align(
-        alignment: below ? Alignment.topCenter : Alignment.bottomCenter,
-        child: DefaultTextStyle(
-          style: theme.textTheme.bodyMedium!,
-          child: card,
-        ),
+      child: DefaultTextStyle(
+        style: theme.textTheme.bodyMedium!,
+        child: card,
       ),
     );
   }
