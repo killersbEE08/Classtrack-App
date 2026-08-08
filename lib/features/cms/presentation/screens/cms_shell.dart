@@ -7,6 +7,7 @@ import '../../domain/cms_role.dart';
 import '../providers/cms_auth_providers.dart';
 import 'cms_dashboard_screen.dart';
 import 'cms_login_screen.dart';
+import 'cms_resources_screen.dart';
 
 /// A CMS navigation section, gated by the current role's permissions.
 class CmsSection {
@@ -35,7 +36,7 @@ final cmsSections = <CmsSection>[
     label: 'Resources',
     icon: Icons.inventory_2_rounded,
     visibleTo: (r) => r.canViewContent,
-    build: (_) => const _Placeholder('Resources'),
+    build: (_) => const CmsResourcesScreen(),
   ),
   CmsSection(
     label: 'Banners',

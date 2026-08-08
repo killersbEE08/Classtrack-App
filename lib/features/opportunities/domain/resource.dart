@@ -155,6 +155,45 @@ class Resource {
   String? get displayImage =>
       (imageUrl != null && imageUrl!.isNotEmpty) ? imageUrl : logoUrl;
 
+  /// Returns a fresh DRAFT copy (no id/slug/timestamps, status reset) — used by
+  /// the CMS "Duplicate" action so a new document is created rather than the
+  /// original overwritten.
+  Resource copyDraft({String titleSuffix = ''}) => Resource(
+        id: '',
+        type: type,
+        title: '$title$titleSuffix',
+        organization: organization,
+        description: description,
+        countries: countries,
+        eligibility: eligibility,
+        startDate: startDate,
+        deadline: deadline,
+        applicationUrl: applicationUrl,
+        imageUrl: imageUrl,
+        tags: tags,
+        status: ResourceStatus.draft,
+        featured: false,
+        sponsored: sponsored,
+        priority: priority,
+        remote: remote,
+        paid: paid,
+        verified: verified,
+        slug: null,
+        company: company,
+        logoUrl: logoUrl,
+        discountText: discountText,
+        redemptionInstructions: redemptionInstructions,
+        verificationRequired: verificationRequired,
+        affiliateUrl: affiliateUrl,
+        terms: terms,
+        categories: categories,
+        targetDegrees: targetDegrees,
+        targetDepartments: targetDepartments,
+        targetInterests: targetInterests,
+        targetCareerGoals: targetCareerGoals,
+        targetAcademicYears: targetAcademicYears,
+      );
+
   // ── Serialization ─────────────────────────────────────────────────────────
 
   factory Resource.fromMap(String id, Map<String, dynamic> map) {
