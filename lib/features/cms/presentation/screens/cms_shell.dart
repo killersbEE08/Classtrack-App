@@ -5,6 +5,8 @@ import '../../../../core/providers/firebase_providers.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/cms_role.dart';
 import '../providers/cms_auth_providers.dart';
+import 'cms_banners_screen.dart';
+import 'cms_campaigns_screen.dart';
 import 'cms_dashboard_screen.dart';
 import 'cms_login_screen.dart';
 import 'cms_resources_screen.dart';
@@ -42,13 +44,13 @@ final cmsSections = <CmsSection>[
     label: 'Banners',
     icon: Icons.view_carousel_rounded,
     visibleTo: (r) => r.canManageMarketing,
-    build: (_) => const _Placeholder('Banners'),
+    build: (_) => const CmsBannersScreen(),
   ),
   CmsSection(
     label: 'Campaigns',
     icon: Icons.campaign_rounded,
     visibleTo: (r) => r.canManageMarketing,
-    build: (_) => const _Placeholder('Campaigns'),
+    build: (_) => const CmsCampaignsScreen(),
   ),
   CmsSection(
     label: 'Notifications',
