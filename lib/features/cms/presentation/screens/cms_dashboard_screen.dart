@@ -1,29 +1,27 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../shared/widgets/ui_kit.dart';
-import '../providers/cms_auth_providers.dart';
+import '../../domain/cms_role.dart';
 
 /// CMS landing page: greeting + a summary of what this role can do, with quick
 /// links to the modules they can access. Live content metrics arrive with the
 /// Resources module.
-class CmsDashboardScreen extends ConsumerWidget {
-  const CmsDashboardScreen({super.key});
+class CmsDashboardScreen extends StatelessWidget {
+  final CmsRole role;
+  const CmsDashboardScreen({super.key, required this.role});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final role = ref.watch(cmsRoleProvider).valueOrNull;
 
     final caps = <(String, IconData, bool)>[
-      ('Manage content', Icons.inventory_2_rounded, role?.canEditContent ?? false),
-      ('Moderate reports', Icons.flag_rounded, role?.canModerate ?? false),
-      ('Marketing & banners', Icons.campaign_rounded,
-          role?.canManageMarketing ?? false),
-      ('View analytics', Icons.insights_rounded, role?.canViewAnalytics ?? false),
-      ('Manage users', Icons.group_rounded, role?.canManageUsers ?? false),
-      ('Audit logs', Icons.receipt_long_rounded, role?.canViewAuditLogs ?? false),
+      ('Manage content', Icons.inventory_2_rounded, role.canEditContent),
+      ('Moderate reports', Icons.flag_rounded, role.canModerate),
+      ('Marketing & banners', Icons.campaign_rounded, role.canManageMarketing),
+      ('View analytics', Icons.insights_rounded, role.canViewAnalytics),
+      ('Manage users', Icons.group_rounded, role.canManageUsers),
+      ('Audit logs', Icons.receipt_long_rounded, role.canViewAuditLogs),
     ];
 
     return ListView(
@@ -32,9 +30,7 @@ class CmsDashboardScreen extends ConsumerWidget {
         Text('Dashboard', style: theme.textTheme.headlineSmall),
         const SizedBox(height: 4),
         Text(
-          role == null
-              ? 'Welcome.'
-              : 'Signed in as ${role.label}. Here\'s what you can manage.',
+          'Signed in as ${role.label}. Here\'s what you can manage.',
           style: theme.textTheme.bodyMedium?.copyWith(color: theme.hintColor),
         ),
         const SizedBox(height: 24),

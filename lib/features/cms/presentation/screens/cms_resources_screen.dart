@@ -6,7 +6,7 @@ import '../../../../shared/widgets/ui_kit.dart';
 import '../../../opportunities/domain/resource.dart';
 import '../../../opportunities/domain/resource_status.dart';
 import '../../../opportunities/domain/resource_type.dart';
-import '../providers/cms_auth_providers.dart';
+import '../../domain/cms_role.dart';
 import '../providers/cms_resource_providers.dart';
 import 'cms_resource_editor_screen.dart';
 
@@ -14,7 +14,8 @@ import 'cms_resource_editor_screen.dart';
 /// status/type filters and per-row lifecycle actions. Editing/creating opens
 /// the [CmsResourceEditorScreen].
 class CmsResourcesScreen extends ConsumerStatefulWidget {
-  const CmsResourcesScreen({super.key});
+  final CmsRole role;
+  const CmsResourcesScreen({super.key, required this.role});
 
   @override
   ConsumerState<CmsResourcesScreen> createState() => _CmsResourcesScreenState();
@@ -39,8 +40,7 @@ class _CmsResourcesScreenState extends ConsumerState<CmsResourcesScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final async = ref.watch(cmsResourcesProvider);
-    final canEdit =
-        ref.watch(cmsRoleProvider).valueOrNull?.canEditContent ?? false;
+    final canEdit = widget.role.canEditContent;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../../opportunities/presentation/providers/opportunities_providers.dart';
-import '../providers/cms_auth_providers.dart';
+import '../../domain/cms_role.dart';
 import '../providers/cms_marketing_providers.dart';
 
 /// Content-operational analytics (PRD §20): inventory metrics derived from the
@@ -12,13 +12,13 @@ import '../providers/cms_marketing_providers.dart';
 /// Firebase Analytics. Uses the visible-resources feed so it's readable by
 /// every CMS role; marketing roles also see live banner/campaign counts.
 class CmsAnalyticsScreen extends ConsumerWidget {
-  const CmsAnalyticsScreen({super.key});
+  final CmsRole role;
+  const CmsAnalyticsScreen({super.key, required this.role});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final async = ref.watch(visibleResourcesProvider);
-    final role = ref.watch(cmsRoleProvider).valueOrNull;
 
     return async.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -64,8 +64,7 @@ class CmsAnalyticsScreen extends ConsumerWidget {
                     AppColors.accent),
                 _Metric('Sponsored', '$sponsored', Icons.star_rounded,
                     AppColors.coral),
-                if (role?.canManageMarketing ?? false)
-                  const _MarketingMetrics(),
+                if (role.canManageMarketing) const _MarketingMetrics(),
               ],
             ),
             const SizedBox(height: 24),

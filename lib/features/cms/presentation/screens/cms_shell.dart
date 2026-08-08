@@ -21,7 +21,7 @@ class CmsSection {
   final String label;
   final IconData icon;
   final bool Function(CmsRole) visibleTo;
-  final WidgetBuilder build;
+  final Widget Function(BuildContext context, CmsRole role) build;
   const CmsSection({
     required this.label,
     required this.icon,
@@ -30,62 +30,63 @@ class CmsSection {
   });
 }
 
-/// All CMS sections in nav order. Modules are filled in incrementally; the ones
-/// not yet built render a placeholder so navigation is fully functional.
+/// All CMS sections in nav order. Each builder receives the already-resolved
+/// role from the shell (never null here), so action-gating never depends on a
+/// re-read of the async role provider inside the screen.
 final cmsSections = <CmsSection>[
   CmsSection(
     label: 'Dashboard',
     icon: Icons.space_dashboard_rounded,
     visibleTo: (_) => true,
-    build: (_) => const CmsDashboardScreen(),
+    build: (_, role) => CmsDashboardScreen(role: role),
   ),
   CmsSection(
     label: 'Resources',
     icon: Icons.inventory_2_rounded,
     visibleTo: (r) => r.canViewContent,
-    build: (_) => const CmsResourcesScreen(),
+    build: (_, role) => CmsResourcesScreen(role: role),
   ),
   CmsSection(
     label: 'Banners',
     icon: Icons.view_carousel_rounded,
     visibleTo: (r) => r.canManageMarketing,
-    build: (_) => const CmsBannersScreen(),
+    build: (_, __) => const CmsBannersScreen(),
   ),
   CmsSection(
     label: 'Campaigns',
     icon: Icons.campaign_rounded,
     visibleTo: (r) => r.canManageMarketing,
-    build: (_) => const CmsCampaignsScreen(),
+    build: (_, __) => const CmsCampaignsScreen(),
   ),
   CmsSection(
     label: 'Notifications',
     icon: Icons.notifications_active_rounded,
     visibleTo: (r) => r.canManageMarketing,
-    build: (_) => const CmsNotificationsScreen(),
+    build: (_, __) => const CmsNotificationsScreen(),
   ),
   CmsSection(
     label: 'Analytics',
     icon: Icons.insights_rounded,
     visibleTo: (r) => r.canViewAnalytics,
-    build: (_) => const CmsAnalyticsScreen(),
+    build: (_, role) => CmsAnalyticsScreen(role: role),
   ),
   CmsSection(
     label: 'Users',
     icon: Icons.group_rounded,
     visibleTo: (r) => r.canManageUsers,
-    build: (_) => const CmsUsersScreen(),
+    build: (_, role) => CmsUsersScreen(callerRole: role),
   ),
   CmsSection(
     label: 'Audit logs',
     icon: Icons.receipt_long_rounded,
     visibleTo: (r) => r.canViewAuditLogs,
-    build: (_) => const CmsAuditLogsScreen(),
+    build: (_, __) => const CmsAuditLogsScreen(),
   ),
   CmsSection(
     label: 'Settings',
     icon: Icons.settings_rounded,
     visibleTo: (r) => r.canEditConfig,
-    build: (_) => const CmsSettingsScreen(),
+    build: (_, __) => const CmsSettingsScreen(),
   ),
 ];
 
@@ -168,7 +169,7 @@ class _CmsShellState extends ConsumerState<CmsShell> {
                 Expanded(
                   child: Container(
                     color: theme.scaffoldBackgroundColor,
-                    child: sections[_index].build(context),
+                    child: sections[_index].build(context, role),
                   ),
                 ),
               ],

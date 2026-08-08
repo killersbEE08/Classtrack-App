@@ -5,13 +5,13 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../domain/cms_role.dart';
 import '../providers/cms_admin_providers.dart';
-import '../providers/cms_auth_providers.dart';
 
 /// Admin-only user role management. Assigns/revokes CMS roles via the
 /// server-enforced `setUserRole` callable. Every change is recorded in the
 /// audit log.
 class CmsUsersScreen extends ConsumerStatefulWidget {
-  const CmsUsersScreen({super.key});
+  final CmsRole callerRole;
+  const CmsUsersScreen({super.key, required this.callerRole});
 
   @override
   ConsumerState<CmsUsersScreen> createState() => _CmsUsersScreenState();
@@ -66,10 +66,10 @@ class _CmsUsersScreenState extends ConsumerState<CmsUsersScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final caller = ref.watch(cmsRoleProvider).valueOrNull;
+    final caller = widget.callerRole;
     final busy = ref.watch(setUserRoleControllerProvider).isLoading;
 
-    if (caller == null || !caller.canManageUsers) {
+    if (!caller.canManageUsers) {
       return const Center(child: Text('You do not have access to user management.'));
     }
 
