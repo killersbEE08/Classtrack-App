@@ -10,12 +10,20 @@
  * shipped to the client.
  */
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { defineSecret } from "firebase-functions/params";
 import { initializeApp } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import {
+  canAssignRole,
+  normalizeRole,
+  roleRank,
+  ROLE_RANK,
+  buildAuditEntry,
+} from "./roles.js";
 
 initializeApp();
 
@@ -828,3 +836,140 @@ export const redeemReferral = onCall({ cors: true }, async (request) => {
 
   return { rewardDays: REFERRAL_REWARD_DAYS };
 });
+
+
+/* ==========================================================================
+ * CMS backend foundation (Phase 5)
+ *
+ * Role-based access for the ClassTracks web CMS. Roles are stored as Firebase
+ * Auth CUSTOM CLAIMS (request.auth.token.role) — never in a client-writable
+ * document — so Firestore security rules can trust them and a student can
+ * never self-grant access.
+ *
+ * BOOTSTRAP: the very first `super_admin` must be set out-of-band (once), e.g.
+ * from a trusted admin shell:
+ *   getAuth().setCustomUserClaims(uid, { role: "super_admin" })
+ * After that, super admins manage everyone else through setUserRole below.
+ *
+ * Every privileged action is recorded in the top-level `auditLogs` collection
+ * (Admin SDK writes; clients can only read with a privileged role).
+ * ======================================================================== */
+
+/** Appends an audit-log entry with a server timestamp. Never throws. */
+async function writeAudit(entry) {
+  try {
+    await getFirestore()
+      .collection("auditLogs")
+      .add({ ...buildAuditEntry(entry), at: FieldValue.serverTimestamp() });
+  } catch (e) {
+    console.error("audit write failed", e);
+  }
+}
+
+/**
+ * setUserRole — assign/revoke a CMS role (custom claim) on a target user.
+ *
+ * Authorization (server-enforced, mirrors roles.js):
+ *  • caller must be super_admin or admin;
+ *  • admin may only assign roles strictly below admin and may not modify a
+ *    user who is already admin/super_admin;
+ *  • super_admin may assign any role, including admin/super_admin, and revoke.
+ *
+ * data: { uid: string, role: string ("none" to revoke) }
+ */
+export const setUserRole = onCall({ cors: true }, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in.");
+  }
+  const callerRole = normalizeRole(request.auth.token.role);
+  const targetUid = String(request.data?.uid || "").trim();
+  const targetRole = normalizeRole(request.data?.role);
+
+  if (!targetUid) {
+    throw new HttpsError("invalid-argument", "Target uid is required.");
+  }
+  if (typeof request.data?.role !== "string") {
+    throw new HttpsError("invalid-argument", "role is required.");
+  }
+  // The requested role string must be known (normalizeRole collapses unknown
+  // values to "none"; reject an unknown non-"none" input rather than silently
+  // revoking).
+  if (targetRole === "none" && request.data.role.trim() !== "none") {
+    throw new HttpsError("invalid-argument", "Unknown role.");
+  }
+
+  if (!canAssignRole(callerRole, targetRole)) {
+    throw new HttpsError(
+      "permission-denied",
+      "You are not allowed to assign this role."
+    );
+  }
+
+  // Fetch the target's CURRENT role so an admin can't demote/alter a peer or a
+  // super_admin (only super_admin may touch admin+ accounts).
+  let currentRole = "none";
+  try {
+    const user = await getAuth().getUser(targetUid);
+    currentRole = normalizeRole(user.customClaims?.role);
+  } catch (_) {
+    throw new HttpsError("not-found", "Target user not found.");
+  }
+  if (callerRole === "admin" && roleRank(currentRole) >= ROLE_RANK.admin) {
+    throw new HttpsError(
+      "permission-denied",
+      "Only a super admin can modify an admin or super admin."
+    );
+  }
+
+  // Replace custom claims (this app only uses the `role` claim). `none` clears.
+  const claims = targetRole === "none" ? {} : { role: targetRole };
+  await getAuth().setCustomUserClaims(targetUid, claims);
+
+  await writeAudit({
+    actorUid: request.auth.uid,
+    actorRole: callerRole,
+    action: "set_user_role",
+    targetType: "user",
+    targetId: targetUid,
+    details: { from: currentRole, to: targetRole },
+  });
+
+  return { ok: true, uid: targetUid, role: targetRole };
+});
+
+/** Derives create/update/delete from a Firestore write event. */
+function writeAction(event) {
+  const before = event.data?.before?.exists;
+  const after = event.data?.after?.exists;
+  if (!before && after) return "create";
+  if (before && !after) return "delete";
+  return "update";
+}
+
+/** Builds an audit trigger for a CMS content collection. */
+function contentAuditTrigger(collection, targetType) {
+  return onDocumentWritten(`${collection}/{id}`, async (event) => {
+    const action = writeAction(event);
+    const after = event.data?.after?.data() || {};
+    const before = event.data?.before?.data() || {};
+    // The CMS stamps `updatedBy` (the editor's uid) on every write; fall back
+    // to the previous value on delete.
+    const actorUid = after.updatedBy || before.updatedBy || "unknown";
+    await writeAudit({
+      actorUid,
+      actorRole: "none", // real role is on the auth token, not the doc
+      action: `${targetType}_${action}`,
+      targetType,
+      targetId: event.params.id,
+      details: {
+        statusFrom: before.status || null,
+        statusTo: after.status || null,
+      },
+    });
+  });
+}
+
+// Audit every change to CMS-managed content.
+export const auditResourceWrite = contentAuditTrigger("resources", "resource");
+export const auditBannerWrite = contentAuditTrigger("banners", "banner");
+export const auditCampaignWrite = contentAuditTrigger("campaigns", "campaign");

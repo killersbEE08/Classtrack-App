@@ -1,0 +1,13 @@
+{
+  "name": "classtracks-rules-tests",
+  "description": "Firestore security-rules tests (Firebase emulator). Requires Java.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore \"node --test\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.0"
+  }
+}
