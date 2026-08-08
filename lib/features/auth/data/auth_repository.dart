@@ -157,6 +157,18 @@ class AuthRepository {
     await _userDoc(uid).set({'displayName': clean}, SetOptions(merge: true));
   }
 
+  /// Merge-writes the optional progressive-profiling fields (country, degree,
+  /// interests, career goal, …). The caller builds [fields] — using
+  /// [FieldValue.delete] for values the student cleared and sanitized strings
+  /// for text — so a single round-trip both sets and clears profile details.
+  /// Only client-writable profile keys should ever be passed here; server-owned
+  /// fields (referral*, entitlements) are never part of this map.
+  Future<void> updateProfileDetails(
+    String uid,
+    Map<String, dynamic> fields,
+  ) =>
+      _userDoc(uid).set(fields, SetOptions(merge: true));
+
   /// Full account deletion — required for Play Store data-safety compliance.
   /// Delegates to the `deleteAccount` Cloud Function, which recursively deletes
   /// the ENTIRE users/{uid} tree, the server-only entitlement/usage docs, and

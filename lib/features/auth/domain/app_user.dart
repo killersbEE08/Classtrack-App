@@ -25,6 +25,50 @@ class AppUser {
   /// they've accepted someone's invite (each user may redeem only once).
   final String? referredBy;
 
+  // ── Progressive profiling (all OPTIONAL) ────────────────────────────────
+  // These power personalised Opportunities & Discounts (Phase 6). They are
+  // filled in later via Settings → Edit profile — never forced at sign-up —
+  // so every field is nullable/empty and the app must work with none of them.
+
+  /// Country the student is based in (e.g. "India"). ⭐ Primary targeting key
+  /// for country-based promotions and discounts.
+  final String? country;
+
+  /// State / region within the country.
+  final String? stateRegion;
+
+  /// City / town.
+  final String? city;
+
+  /// University the student attends.
+  final String? university;
+
+  /// College / institute (may differ from the parent university).
+  final String? college;
+
+  /// Degree / programme, e.g. "MBA", "B.Tech".
+  final String? degree;
+
+  /// Department / branch, e.g. "Computer Science", "Finance".
+  final String? department;
+
+  /// Current academic year (1..N), null when unknown.
+  final int? academicYear;
+
+  /// Current semester (1..N), null when unknown.
+  final int? semester;
+
+  /// Expected graduation year (e.g. 2027), null when unknown.
+  final int? graduationYear;
+
+  /// Primary career goal, e.g. "Internship", "Job", "Higher studies",
+  /// "Research", "Freelancing", "Startup", "Government exams".
+  final String? careerGoal;
+
+  /// Free-form interests used for opportunity matching, e.g. ["AI",
+  /// "Finance"]. Empty when the student hasn't picked any.
+  final List<String> interests;
+
   const AppUser({
     required this.uid,
     this.displayName,
@@ -37,7 +81,35 @@ class AppUser {
     this.referralCode,
     this.referralCount = 0,
     this.referredBy,
+    this.country,
+    this.stateRegion,
+    this.city,
+    this.university,
+    this.college,
+    this.degree,
+    this.department,
+    this.academicYear,
+    this.semester,
+    this.graduationYear,
+    this.careerGoal,
+    this.interests = const [],
   });
+
+  /// True once the student has filled in at least one profiling field. Used to
+  /// nudge (never force) profile completion and to gate personalisation.
+  bool get hasAnyProfileDetails =>
+      (country?.isNotEmpty ?? false) ||
+      (stateRegion?.isNotEmpty ?? false) ||
+      (city?.isNotEmpty ?? false) ||
+      (university?.isNotEmpty ?? false) ||
+      (college?.isNotEmpty ?? false) ||
+      (degree?.isNotEmpty ?? false) ||
+      (department?.isNotEmpty ?? false) ||
+      academicYear != null ||
+      semester != null ||
+      graduationYear != null ||
+      (careerGoal?.isNotEmpty ?? false) ||
+      interests.isNotEmpty;
 
   AppUser copyWith({
     String? displayName,
@@ -49,6 +121,18 @@ class AppUser {
     String? referralCode,
     int? referralCount,
     String? referredBy,
+    String? country,
+    String? stateRegion,
+    String? city,
+    String? university,
+    String? college,
+    String? degree,
+    String? department,
+    int? academicYear,
+    int? semester,
+    int? graduationYear,
+    String? careerGoal,
+    List<String>? interests,
   }) {
     return AppUser(
       uid: uid,
@@ -63,6 +147,18 @@ class AppUser {
       referralCode: referralCode ?? this.referralCode,
       referralCount: referralCount ?? this.referralCount,
       referredBy: referredBy ?? this.referredBy,
+      country: country ?? this.country,
+      stateRegion: stateRegion ?? this.stateRegion,
+      city: city ?? this.city,
+      university: university ?? this.university,
+      college: college ?? this.college,
+      degree: degree ?? this.degree,
+      department: department ?? this.department,
+      academicYear: academicYear ?? this.academicYear,
+      semester: semester ?? this.semester,
+      graduationYear: graduationYear ?? this.graduationYear,
+      careerGoal: careerGoal ?? this.careerGoal,
+      interests: interests ?? this.interests,
     );
   }
 
@@ -101,6 +197,22 @@ class AppUser {
       referralCode: map['referralCode'] as String?,
       referralCount: (map['referralCount'] as num?)?.toInt() ?? 0,
       referredBy: map['referredBy'] as String?,
+      country: map['country'] as String?,
+      stateRegion: map['stateRegion'] as String?,
+      city: map['city'] as String?,
+      university: map['university'] as String?,
+      college: map['college'] as String?,
+      degree: map['degree'] as String?,
+      department: map['department'] as String?,
+      academicYear: (map['academicYear'] as num?)?.toInt(),
+      semester: (map['semester'] as num?)?.toInt(),
+      graduationYear: (map['graduationYear'] as num?)?.toInt(),
+      careerGoal: map['careerGoal'] as String?,
+      interests: (map['interests'] as List?)
+              ?.map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toList() ??
+          const [],
     );
   }
 }

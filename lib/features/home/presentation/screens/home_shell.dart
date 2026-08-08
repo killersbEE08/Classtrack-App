@@ -21,6 +21,7 @@ import '../../../schedule/presentation/screens/edit_session_screen.dart';
 import '../../../subjects/presentation/screens/edit_subject_screen.dart';
 import '../../../tasks/presentation/screens/tasks_screen.dart';
 import '../../../tasks/presentation/screens/share_link_handler.dart';
+import '../../../opportunities/presentation/screens/opportunities_screen.dart';
 import '../../../attendance/presentation/screens/attendance_screen.dart';
 import '../../../attendance/presentation/providers/attendance_providers.dart';
 import '../../../attendance/domain/attendance_record.dart';
@@ -243,7 +244,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
   static const _screens = [
     DashboardScreen(),
     ScheduleScreen(),
-    TasksScreen(),
+    OpportunitiesScreen(),
     AttendanceScreen(),
   ];
 
@@ -304,8 +305,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
             key: _navKey,
             title: 'Move around',
             body:
-                'Switch between Home, Schedule, Tasks and Attendance from this '
-                'bar — it stays with you everywhere.',
+                'Switch between Home, Schedule, Opportunities and Attendance '
+                'from this bar — it stays with you everywhere.',
             icon: Icons.dashboard_rounded,
           ),
           TourStep(
@@ -512,7 +513,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
           index: _index,
           onSelect: (i) {
             if (i != _index) {
-              const names = ['home', 'schedule', 'tasks', 'attendance'];
+              const names = ['home', 'schedule', 'opportunities', 'attendance'];
               ref.read(analyticsProvider).tab(names[i]);
             }
             setState(() => _index = i);
@@ -641,9 +642,9 @@ class _FloatingNavBar extends StatelessWidget {
             ),
             const SizedBox(width: 58), // gap for the center FAB
             _NavItem(
-              icon: Icons.check_circle_outline_rounded,
-              activeIcon: Icons.check_circle_rounded,
-              label: 'Tasks',
+              icon: Icons.explore_outlined,
+              activeIcon: Icons.explore_rounded,
+              label: 'Opportunities',
               selected: index == 2,
               onTap: () => onSelect(2),
             ),

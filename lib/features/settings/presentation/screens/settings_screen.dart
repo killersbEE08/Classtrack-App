@@ -10,6 +10,7 @@ import '../../../../core/providers/firebase_providers.dart';
 import '../../../../core/providers/notification_prefs_provider.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
+import '../../../auth/presentation/screens/edit_profile_screen.dart';
 import '../../../exams/presentation/providers/exam_providers.dart';
 import '../../../insights/presentation/screens/daily_agenda_screen.dart';
 import '../../../insights/presentation/screens/insights_screen.dart';
@@ -43,7 +44,8 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _profileHeader(theme, profile?.displayName, profile?.email, isPro),
+          _profileHeaderTappable(context, theme, profile?.displayName,
+              profile?.email, isPro),
           const SizedBox(height: 16),
           _sectionLabel(theme, 'ClassTrack Pro'),
           _proCard(context, ref, theme),
@@ -337,6 +339,18 @@ class SettingsScreen extends ConsumerWidget {
               children: [
                 ListTile(
                   contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.person_outline_rounded,
+                      color: AppColors.primary),
+                  title: const Text('Edit profile'),
+                  subtitle: const Text(
+                      'Name, education, interests & career goal'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const EditProfileScreen())),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
                   leading: Icon(PhosphorIcons.signOut()),
                   title: const Text('Sign out'),
                   onTap: () => ref.read(authRepositoryProvider).signOut(),
@@ -423,6 +437,21 @@ class SettingsScreen extends ConsumerWidget {
             'Please sign out and sign in again, then retry deleting your account.'),
       ));
     }
+  }
+
+  Widget _profileHeaderTappable(BuildContext context, ThemeData theme,
+      String? name, String? email, bool isPro) {
+    return Semantics(
+      button: true,
+      label: 'Edit profile',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const EditProfileScreen()),
+        ),
+        child: _profileHeader(theme, name, email, isPro),
+      ),
+    );
   }
 
   Widget _profileHeader(
