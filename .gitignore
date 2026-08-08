@@ -39,3 +39,7 @@ gk.txt
 
 # Coverage
 coverage/
+
+# Firebase CLI logs
+firebase-debug.log
+*.log
