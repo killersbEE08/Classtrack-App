@@ -94,6 +94,7 @@ class ResourceCard extends ConsumerWidget {
     final isSaved = saved.contains(resource.id);
     final status = resource.effectiveStatus;
     final days = resource.daysUntilDeadline;
+    final match = ref.watch(resourceScoreProvider(resource));
 
     String? deadlineLabel;
     Color deadlineColor = theme.hintColor;
@@ -134,24 +135,29 @@ class ResourceCard extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Flexible(
-                        child: ResourcePill(
-                          label: resource.type.label,
-                          color: resource.type.color,
-                          icon: resource.type.icon,
-                        ),
+                      ResourcePill(
+                        label: resource.type.label,
+                        color: resource.type.color,
+                        icon: resource.type.icon,
                       ),
-                      if (status != ResourceStatus.active) ...[
-                        const SizedBox(width: 6),
+                      if (status != ResourceStatus.active)
                         ResourcePill(label: status.label, color: status.color),
-                      ],
-                      if (resource.sponsored) ...[
-                        const SizedBox(width: 6),
+                      if (resource.sponsored)
                         const ResourcePill(
                             label: 'Sponsored', color: AppColors.accent),
-                      ],
+                      if (!resource.type.isDiscount &&
+                          match.personalized &&
+                          match.score >= 60)
+                        ResourcePill(
+                          label: '${match.score}% match',
+                          color: AppColors.success,
+                          icon: Icons.auto_awesome_rounded,
+                        ),
                     ],
                   ),
                   const SizedBox(height: 8),

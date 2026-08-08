@@ -4,6 +4,7 @@ import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/firebase_providers.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../data/resource_repository.dart';
+import '../../domain/recommendation.dart';
 import '../../domain/recommendation_weights.dart';
 import '../../domain/resource.dart';
 import '../../domain/resource_type.dart';
@@ -39,13 +40,28 @@ final resourceByIdProvider =
 });
 
 /// Active-feed opportunities (excludes discounts), country-filtered to the
-/// signed-in user's profile country.
+/// signed-in user's profile country, then ranked by personalized match score.
 final opportunitiesFeedProvider = Provider<List<Resource>>((ref) {
   final all = ref.watch(visibleResourcesProvider).valueOrNull ?? const [];
-  final country = ref.watch(userProfileProvider).valueOrNull?.country;
-  return ResourceQueries.feed(all, country: country)
+  final user = ref.watch(userProfileProvider).valueOrNull;
+  final list = ResourceQueries.feed(all, country: user?.country)
       .where((r) => !r.type.isDiscount)
       .toList();
+  return ref.watch(recommenderProvider).rank(list, user);
+});
+
+/// The recommendation engine, built from the remotely-configurable weights.
+final recommenderProvider = Provider<Recommender>((ref) {
+  final weights = ref.watch(recommendationWeightsProvider).valueOrNull ??
+      RecommendationWeights.defaults;
+  return Recommender(weights);
+});
+
+/// The personalized match score for a single resource (for match badges).
+final resourceScoreProvider =
+    Provider.family<RecommendationScore, Resource>((ref, r) {
+  final user = ref.watch(userProfileProvider).valueOrNull;
+  return ref.watch(recommenderProvider).score(r, user);
 });
 
 /// Active-feed discounts, country-filtered.

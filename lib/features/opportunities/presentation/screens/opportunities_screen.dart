@@ -150,6 +150,11 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
                   if (_verifiedOnly) {
                     list = list.where((r) => r.verified).toList();
                   }
+                  // Personalized ordering (Phase 6).
+                  list = ref.read(recommenderProvider).rank(
+                        list,
+                        ref.watch(userProfileProvider).valueOrNull,
+                      );
 
                   return Column(
                     children: [

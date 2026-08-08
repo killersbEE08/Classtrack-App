@@ -72,6 +72,7 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
     final status = r.effectiveStatus;
     final related = _related(ref);
     final isDiscount = r.type.isDiscount;
+    final match = ref.watch(resourceScoreProvider(r));
 
     return Scaffold(
       appBar: AppBar(
@@ -129,6 +130,12 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
                   label: r.type.label,
                   color: r.type.color,
                   icon: r.type.icon),
+              if (!isDiscount && match.personalized && match.score > 0)
+                ResourcePill(
+                  label: '${match.score}% · ${match.tier.label}',
+                  color: AppColors.success,
+                  icon: Icons.auto_awesome_rounded,
+                ),
               ResourcePill(label: status.label, color: status.color),
               if (r.sponsored)
                 const ResourcePill(label: 'Sponsored', color: AppColors.accent),
