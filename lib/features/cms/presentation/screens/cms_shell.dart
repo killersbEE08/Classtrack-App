@@ -5,11 +5,13 @@ import '../../../../core/providers/firebase_providers.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../domain/cms_role.dart';
 import '../providers/cms_auth_providers.dart';
+import 'cms_audit_logs_screen.dart';
 import 'cms_banners_screen.dart';
 import 'cms_campaigns_screen.dart';
 import 'cms_dashboard_screen.dart';
 import 'cms_login_screen.dart';
 import 'cms_resources_screen.dart';
+import 'cms_users_screen.dart';
 
 /// A CMS navigation section, gated by the current role's permissions.
 class CmsSection {
@@ -68,13 +70,13 @@ final cmsSections = <CmsSection>[
     label: 'Users',
     icon: Icons.group_rounded,
     visibleTo: (r) => r.canManageUsers,
-    build: (_) => const _Placeholder('Admin users'),
+    build: (_) => const CmsUsersScreen(),
   ),
   CmsSection(
     label: 'Audit logs',
     icon: Icons.receipt_long_rounded,
     visibleTo: (r) => r.canViewAuditLogs,
-    build: (_) => const _Placeholder('Audit logs'),
+    build: (_) => const CmsAuditLogsScreen(),
   ),
   CmsSection(
     label: 'Settings',
