@@ -164,6 +164,49 @@ void main() {
       expect(d.brandName, 'Adobe');
       expect(d.displayImage, 'logo.png');
     });
+
+    test('parses extended fields (backward-compatible additions)', () {
+      final r = Resource.fromMap('r2', {
+        'type': 'discount',
+        'title': 'Deal',
+        'organization': 'Org',
+        'fullDescription': 'Long body',
+        'officialWebsite': 'https://acme.example',
+        'benefits': 'Free stuff',
+        'howToApply': 'Click apply',
+        'requirements': 'Be a student',
+        'discountCode': 'SAVE50',
+        'discountPercent': 50,
+        'redemptionUrl': 'https://acme.example/redeem',
+        'homepageEligible': true,
+        'recommendationEligible': false,
+        'relatedResourceIds': ['a', 'b'],
+      });
+      expect(r.fullDescription, 'Long body');
+      expect(r.officialWebsite, 'https://acme.example');
+      expect(r.benefits, 'Free stuff');
+      expect(r.howToApply, 'Click apply');
+      expect(r.requirements, 'Be a student');
+      expect(r.discountCode, 'SAVE50');
+      expect(r.discountPercent, 50);
+      expect(r.redemptionUrl, 'https://acme.example/redeem');
+      expect(r.homepageEligible, isTrue);
+      expect(r.recommendationEligible, isFalse);
+      expect(r.relatedResourceIds, ['a', 'b']);
+    });
+
+    test('extended fields default safely when absent (old documents)', () {
+      final r = Resource.fromMap('r3', {
+        'type': 'internship',
+        'title': 'Old doc',
+        'organization': 'Org',
+      });
+      expect(r.fullDescription, isNull);
+      expect(r.homepageEligible, isFalse);
+      expect(r.recommendationEligible, isTrue); // default-on
+      expect(r.relatedResourceIds, isEmpty);
+      expect(r.scheduledPublishAt, isNull);
+    });
   });
 
   group('ResourceQueries', () {

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../shared/widgets/ui_kit.dart';
+import '../../domain/audit_format.dart';
 import '../../domain/audit_log.dart';
 import '../providers/cms_admin_providers.dart';
 
@@ -71,59 +72,100 @@ class _AuditRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final details = entry.details.entries
-        .map((e) => '${e.key}: ${e.value}')
-        .join(' · ');
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: softCard(context),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(11),
+    final headline = auditHeadline(entry);
+    final transition = auditStatusTransition(entry);
+    final actor = auditActor(entry);
+    return InkWell(
+      onTap: () => _showRaw(context),
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: softCard(context),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(11),
+              ),
+              child: Icon(_icon, color: AppColors.primary, size: 19),
             ),
-            child: Icon(_icon, color: AppColors.primary, size: 19),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(entry.action,
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 2),
-                Text(
-                    '${entry.targetType}${entry.targetId.isNotEmpty ? ' · ${entry.targetId}' : ''}',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.hintColor)),
-                if (details.isNotEmpty)
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(headline,
+                      style: theme.textTheme.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                  if (transition != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(transition,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w700)),
+                      ),
+                    ),
                   Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Text(details,
-                        style: theme.textTheme.bodySmall
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text('by $actor',
+                        style: theme.textTheme.labelSmall
                             ?.copyWith(color: theme.hintColor)),
                   ),
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    'by ${entry.actorRole} · ${entry.actorUid}',
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: theme.hintColor),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
+            const SizedBox(width: 12),
+            Text(_time(entry.at),
+                style: theme.textTheme.labelSmall
+                    ?.copyWith(color: theme.hintColor)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Raw entry (ids + all details) for debugging — kept accessible on tap.
+  void _showRaw(BuildContext context) {
+    final raw = <String, dynamic>{
+      'action': entry.action,
+      'target': '${entry.targetType} ${entry.targetId}',
+      'actorUid': entry.actorUid,
+      'actorRole': entry.actorRole,
+      if (entry.actorEmail != null) 'actorEmail': entry.actorEmail,
+      ...entry.details,
+    };
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Audit entry'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (final e in raw.entries)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text('${e.key}: ${e.value}'),
+                ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Text(_time(entry.at),
-              style: theme.textTheme.labelSmall
-                  ?.copyWith(color: theme.hintColor)),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
         ],
       ),
     );

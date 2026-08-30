@@ -47,7 +47,9 @@ class HabitsScreen extends ConsumerWidget {
             habitsAsync.when(
               loading: () => const Padding(
                   padding: EdgeInsets.only(top: 40), child: LoadingView()),
-              error: (e, _) => ErrorView(error: e),
+              error: (e, _) => ErrorView(
+                  error: e,
+                  onRetry: () => ref.invalidate(habitsStreamProvider)),
               data: (habits) {
                 if (habits.isEmpty) return _empty(context);
                 return Column(

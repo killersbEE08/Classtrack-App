@@ -21,8 +21,27 @@ class SavedOpportunitiesScreen extends ConsumerWidget {
       body: async.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => Center(
-          child: Text("Couldn't load your saved items.",
-              style: theme.textTheme.bodyMedium),
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.cloud_off_rounded, size: 48, color: theme.hintColor),
+                const SizedBox(height: 12),
+                Text("Couldn't load your saved items.",
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () => ref.invalidate(savedResourcesProvider),
+                  icon: const Icon(Icons.refresh_rounded, size: 18),
+                  label: const Text('Refresh'),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary),
+                ),
+              ],
+            ),
+          ),
         ),
         data: (items) {
           if (items.isEmpty) {
@@ -51,16 +70,17 @@ class SavedOpportunitiesScreen extends ConsumerWidget {
           return RefreshIndicator(
             color: AppColors.primary,
             onRefresh: () async => ref.invalidate(savedResourcesProvider),
-            child: ListView(
+            child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-              children: [
-                for (final r in items)
-                  ResourceCard(
-                    resource: r,
-                    onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => ResourceDetailScreen(resource: r))),
-                  ),
-              ],
+              itemCount: items.length,
+              itemBuilder: (_, i) {
+                final r = items[i];
+                return ResourceCard(
+                  resource: r,
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => ResourceDetailScreen(resource: r))),
+                );
+              },
             ),
           );
         },

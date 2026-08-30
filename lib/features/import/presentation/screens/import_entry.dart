@@ -2,8 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../services/google_calendar_service.dart';
+import '../../../../services/calendar_auto_sync.dart';
 import '../providers/import_providers.dart';
 import 'import_screen.dart';
+
+/// Temporarily gates the one-tap Google Calendar/Tasks import behind a
+/// "coming soon" message. Flip to `true` to re-enable the real import — e.g.
+/// for the OAuth verification demo build — once Google has approved the
+/// calendar.readonly / tasks.readonly scopes. Keep it `false` for public store
+/// builds until then.
+const bool kGoogleImportEnabled = true;
 
 /// Bottom sheet offering the ways to import a timetable: straight from Google
 /// Calendar, or via the AI photo/text importer. Shared by the Schedule and
@@ -26,17 +34,30 @@ void showImportOptions(BuildContext context, WidgetRef ref) {
             ListTile(
               leading: const Icon(Icons.event_available_rounded),
               title: const Text('Google Calendar'),
-              subtitle:
-                  const Text('Save your calendar events & tasks into Tasks'),
+              subtitle: const Text(
+                kGoogleImportEnabled
+                    ? 'Save your calendar events & tasks into Tasks'
+                    : 'Coming soon',
+              ),
               onTap: () {
                 Navigator.pop(ctx);
-                runGoogleCalendarImport(context, ref);
+                if (kGoogleImportEnabled) {
+                  runGoogleCalendarImport(context, ref);
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Google Calendar & Tasks import — coming soon!',
+                      ),
+                    ),
+                  );
+                }
               },
             ),
             ListTile(
               leading: const Icon(Icons.auto_awesome_rounded),
-              title: const Text('Photo or text (AI)'),
-              subtitle: const Text('Scan a timetable image or paste text'),
+              title: const Text('Photo, PDF or text (AI)'),
+              subtitle: const Text('Scan an image, upload a PDF, or paste text'),
               onTap: () {
                 Navigator.pop(ctx);
                 Navigator.of(context).push(
@@ -88,6 +109,9 @@ Future<void> runGoogleCalendarImport(
       return;
     }
     final result = await repo.commitGoogleImport(events: events, tasks: tasks);
+    // Google is now linked with the calendar/tasks scopes granted, so the daily
+    // 7 PM background auto-sync can run silently from here on.
+    await ref.read(googleAutoSyncConnectedProvider.notifier).set(true);
     navigator.pop(); // dismiss the spinner
     final n = result.tasks;
     final message = n == 0

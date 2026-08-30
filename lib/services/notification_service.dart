@@ -153,7 +153,7 @@ class NotificationService {
       // Leave the default (UTC) if the platform can't report a zone; better
       // than crashing, and rare on real devices.
     }
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidInit = AndroidInitializationSettings('@drawable/ic_stat_notify');
     const iosInit = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
@@ -257,6 +257,7 @@ class NotificationService {
           _channelId,
           _channelName,
           channelDescription: _channelDesc,
+          icon: 'ic_stat_notify',
           importance: Importance.high,
           priority: Priority.high,
         ),
@@ -273,12 +274,15 @@ class NotificationService {
           _channelId,
           _channelName,
           channelDescription: _channelDesc,
+          icon: 'ic_stat_notify',
           importance: Importance.high,
           priority: Priority.high,
           actions: <AndroidNotificationAction>[
-            AndroidNotificationAction(_actionPresent, '✅ Present',
+            AndroidNotificationAction(_actionPresent, '✔\uFE0F Present',
+                icon: DrawableResourceAndroidBitmap('ic_action_present'),
                 showsUserInterface: true),
-            AndroidNotificationAction(_actionAbsent, '❌ Absent',
+            AndroidNotificationAction(_actionAbsent, '✖\uFE0F Absent',
+                icon: DrawableResourceAndroidBitmap('ic_action_absent'),
                 showsUserInterface: true),
           ],
         ),
@@ -363,6 +367,20 @@ class NotificationService {
           String subjectId, int weekday0, String startTime, String endTime) =>
       8 * _idBand + _hash20('$subjectId#$weekday0#$startTime#$endTime');
 
+  /// After-class check-in id for a ONE-OFF (specific-date) class (band 8).
+  /// Keyed by subject + ISO date + start/end time so each dated class gets a
+  /// distinct nudge that never collides with the recurring (weekday-keyed) ids.
+  @visibleForTesting
+  static int attendanceCheckOnceId(
+          String subjectId, String dateId, String startTime, String endTime) =>
+      8 * _idBand + _hash20('$subjectId#once#$dateId#$startTime#$endTime');
+
+  /// ISO "yyyy-MM-dd" for a date, without importing an intl formatter.
+  static String _isoDate(DateTime d) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${d.year}-${two(d.month)}-${two(d.day)}';
+  }
+
   /// Schedule a weekly "mark your attendance" nudge [minutesAfter] the end of
   /// each recurring class. The notification carries Present/Absent actions and,
   /// on a plain tap, deep-links to the Attendance tab. Idempotent: re-scheduling
@@ -386,23 +404,43 @@ class NotificationService {
 
     final scheduledIds = <int>{};
     for (final s in sessions) {
-      if (!s.recurring || s.dayOfWeek == null) continue;
       final parts = s.endTime.split(':');
       if (parts.length != 2) continue;
       final hour = int.tryParse(parts[0]) ?? 9;
       final minute = int.tryParse(parts[1]) ?? 0;
 
-      // Fire minutesAfter the class END. Reuse the weekday-aligned helper with a
-      // negative "before" so it adds the delay instead of subtracting it.
-      final when = _nextInstanceOfWeekdayTime(
-        weekday0: s.dayOfWeek!,
-        hour: hour,
-        minute: minute,
-        minutesBefore: -minutesAfter,
-      );
+      // Compute the fire time + a stable id for both recurring and one-off
+      // classes. Recurring classes repeat weekly; one-off (specific-date)
+      // classes fire once and are skipped once their time has passed.
+      final int id;
+      final tz.TZDateTime when;
+      final bool repeatsWeekly;
+      if (s.recurring && s.dayOfWeek != null) {
+        // Fire minutesAfter the class END. Reuse the weekday-aligned helper with
+        // a negative "before" so it adds the delay instead of subtracting it.
+        when = _nextInstanceOfWeekdayTime(
+          weekday0: s.dayOfWeek!,
+          hour: hour,
+          minute: minute,
+          minutesBefore: -minutesAfter,
+        );
+        id = attendanceCheckId(
+            subject.id, s.dayOfWeek!, s.startTime, s.endTime);
+        repeatsWeekly = true;
+      } else if (!s.recurring && s.specificDate != null) {
+        final d = s.specificDate!;
+        when = tz.TZDateTime(tz.local, d.year, d.month, d.day, hour, minute)
+            .add(Duration(minutes: minutesAfter));
+        // A one-off class whose check-in time is already past can never fire
+        // again — don't schedule it in the past.
+        if (when.isBefore(tz.TZDateTime.now(tz.local))) continue;
+        id = attendanceCheckOnceId(
+            subject.id, _isoDate(d), s.startTime, s.endTime);
+        repeatsWeekly = false;
+      } else {
+        continue;
+      }
 
-      final id =
-          attendanceCheckId(subject.id, s.dayOfWeek!, s.startTime, s.endTime);
       if (prefs != null && prefs.isQuietHour(when.hour)) {
         await _plugin.cancel(id: id);
         continue;
@@ -415,7 +453,10 @@ class NotificationService {
         scheduledDate: when,
         notificationDetails: _checkInDetails,
         androidScheduleMode: _scheduleMode,
-        matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+        // Recurring classes repeat weekly at the same weekday+time; a one-off
+        // fires exactly once (no repeat component).
+        matchDateTimeComponents:
+            repeatsWeekly ? DateTimeComponents.dayOfWeekAndTime : null,
         // slot = the class start time, matching the per-occurrence key used
         // everywhere else so marking from the notification never double-counts.
         payload: '$attendanceCheckInPrefix|${subject.id}|${s.startTime}',

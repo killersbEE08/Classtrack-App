@@ -38,54 +38,66 @@ class ProgressRing extends StatelessWidget {
     final double pctFont = (size * 0.24).clamp(13.0, 34.0);
     final double subFont = (size * 0.115).clamp(8.0, 13.0);
     final double innerWidth = (size - strokeWidth * 2 - 8).clamp(24.0, size);
-    return SizedBox(
-      width: size,
-      height: size,
-      child: CustomPaint(
-        painter: _RingPainter(
-          percent: percent.clamp(0, 100) / 100,
-          color: ringColor,
-          // A faint tint of the ring colour reads as a soft pastel track,
-          // matching the app's minimalist vibe far better than a heavy grey.
-          track: ringColor.withValues(alpha: 0.15),
-          strokeWidth: strokeWidth,
-        ),
-        child: Center(
-          child: SizedBox(
-            width: innerWidth,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    centerLabel ?? '${percent.toStringAsFixed(0)}%',
-                    maxLines: 1,
-                    style: theme.textTheme.headlineSmall?.copyWith(
-                      color: ringColor,
-                      fontWeight: FontWeight.w700,
-                      fontSize: pctFont,
-                      height: 1.0,
-                    ),
-                  ),
-                ),
-                if (subLabel != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 1),
-                    child: FittedBox(
+    // Announce a single meaningful value to screen readers instead of the
+    // painter + fragmented FittedBox text. The visual subtree is excluded so
+    // it isn't read twice.
+    final semanticValue = centerLabel ??
+        '${percent.toStringAsFixed(0)} percent'
+            '${subLabel != null ? ', $subLabel' : ''}';
+    return Semantics(
+      label: 'Attendance',
+      value: semanticValue,
+      child: ExcludeSemantics(
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: CustomPaint(
+            painter: _RingPainter(
+              percent: percent.clamp(0, 100) / 100,
+              color: ringColor,
+              // A faint tint of the ring colour reads as a soft pastel track,
+              // matching the app's minimalist vibe far better than a heavy grey.
+              track: ringColor.withValues(alpha: 0.15),
+              strokeWidth: strokeWidth,
+            ),
+            child: Center(
+              child: SizedBox(
+                width: innerWidth,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FittedBox(
                       fit: BoxFit.scaleDown,
                       child: Text(
-                        subLabel!,
+                        centerLabel ?? '${percent.toStringAsFixed(0)}%',
                         maxLines: 1,
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          fontSize: subFont,
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          color: ringColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: pctFont,
                           height: 1.0,
                         ),
                       ),
                     ),
-                  ),
-              ],
+                    if (subLabel != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 1),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            subLabel!,
+                            maxLines: 1,
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontSize: subFont,
+                              height: 1.0,
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),

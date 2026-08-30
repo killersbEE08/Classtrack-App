@@ -1,7 +1,7 @@
 name: classtrack
 description: "ClassTrack — Attendance & class schedule tracker with Gemini AI import."
 publish_to: "none"
-version: 1.0.23+25
+version: 1.0.37+39
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
@@ -78,6 +78,8 @@ dependencies:
   syncfusion_flutter_pdf: ^34.1.32
   firebase_analytics: ^12.4.5
   firebase_messaging: ^16.4.3
+  # Crash + non-fatal error reporting. Paired with firebase_core 4.x.
+  firebase_crashlytics: ^5.2.7
 
 dev_dependencies:
   flutter_test:
@@ -90,6 +92,30 @@ flutter:
   uses-material-design: true
   assets:
     - assets/illustrations/
+    - assets/fonts/
+
+  # Bundled fonts. Shipping the .ttf assets locally means the very first frame
+  # renders in Poppins/Inter with NO runtime download — removing the launch
+  # reflow that happened while google_fonts fetched them over the network.
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Poppins-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Poppins-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Poppins-Bold.ttf
+          weight: 700
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.ttf
+          weight: 600
 
 # App launcher icon (run: dart run flutter_launcher_icons)
 flutter_launcher_icons:

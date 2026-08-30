@@ -1,8 +1,11 @@
 import 'dart:async';
 
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -16,14 +19,129 @@ import 'services/notification_service.dart';
 import 'services/push_messaging_service.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // Run the whole app inside a guarded zone so ANY uncaught asynchronous error
+  // is captured and forwarded to Crashlytics as a fatal report — otherwise
+  // async errors outside the Flutter framework would be invisible in prod.
+  await runZonedGuarded<Future<void>>(() async {
+    WidgetsFlutterBinding.ensureInitialized();
 
-  // Firebase core must be ready before the app builds any auth/Firestore
-  // providers. This is a LOCAL initialisation that completes offline.
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+    // ── Edge-to-edge display ─────────────────────────────────────────────
+    // Android 15+ (targetSdk 35+) enforces edge-to-edge: the app draws behind
+    // the status and navigation bars. Opt in explicitly so the layout extends
+    // under the system bars on every device (fixes the Play Console
+    // "Edge-to-edge may not display for all users" recommendation), and make
+    // the system bars transparent so Flutter's own UI shows through instead of
+    // a legacy scrim. Purely a display setting; safe and reversible.
+    if (!kIsWeb) {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      SystemChrome.setSystemUIOverlayStyle(
+        const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          systemNavigationBarColor: Colors.transparent,
+          systemNavigationBarContrastEnforced: false,
+          systemStatusBarContrastEnforced: false,
+        ),
+      );
+    }
 
+    // Firebase core must be ready before the app builds any auth/Firestore
+    // providers. This is a LOCAL initialisation that completes offline.
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+
+    // ── Crash reporting ──────────────────────────────────────────────────
+    // Route Flutter framework errors and low-level platform errors into
+    // Crashlytics. Collection is disabled in debug so local runs and tests
+    // don't pollute the dashboard. These handlers are synchronous and offline
+    // safe (reports are cached on-device and uploaded on the next launch).
+    //
+    // Crashlytics has NO web implementation, so we only wire it on mobile —
+    // otherwise the plugin call would throw/hang before runApp() and leave the
+    // web build stuck on the splash screen.
+    if (!kIsWeb) {
+      final crashlytics = FirebaseCrashlytics.instance;
+      await crashlytics.setCrashlyticsCollectionEnabled(!kDebugMode);
+
+      FlutterError.onError = (FlutterErrorDetails details) {
+        FlutterError.presentError(details);
+        // Transient/environmental failures (a briefly-unavailable Firestore
+        // backend, a platform channel that isn't wired on this surface, a
+        // timeout) are not code defects and must NOT be reported as fatal
+        // crashes — otherwise flaky networks tank the crash-free rate and
+        // trigger "repetitive crash" alerts. Log them as non-fatal so they
+        // stay visible for diagnosis without counting as crashes.
+        if (_isNonFatalInfraError(details.exception)) {
+          crashlytics.recordError(
+            details.exception,
+            details.stack,
+            reason: details.context?.toDescription(),
+            fatal: false,
+          );
+        } else {
+          crashlytics.recordFlutterFatalError(details);
+        }
+      };
+      // Errors that escape the Flutter framework (e.g. in a platform callback).
+      PlatformDispatcher.instance.onError = (error, stack) {
+        crashlytics.recordError(
+          error,
+          stack,
+          fatal: !_isNonFatalInfraError(error),
+        );
+        return true;
+      };
+    }
+
+    await _bootstrap();
+  }, (error, stack) {
+    // Any async error not caught elsewhere lands here.
+    if (!kIsWeb) {
+      FirebaseCrashlytics.instance
+          .recordError(error, stack, fatal: !_isNonFatalInfraError(error));
+    } else {
+      // ignore: avoid_print
+      print('Uncaught zone error: $error\n$stack');
+    }
+  });
+}
+
+/// Whether [error] is an environmental/transient failure rather than a code
+/// defect, and therefore should be logged to Crashlytics as NON-fatal.
+///
+/// These surface as "crashes" only because the global handlers above forward
+/// every uncaught error, but the app keeps running — a flaky/absent network, a
+/// Firestore backend that's momentarily unreachable, a platform channel that
+/// isn't wired on the current surface/isolate, or a bounded operation that
+/// timed out. Reporting them as fatal wrecked the crash-free-users metric and
+/// produced the repetitive `[cloud_firestore/unavailable]`,
+/// `MissingPluginException` and timeout "crashes" on the dashboard.
+bool _isNonFatalInfraError(Object error) {
+  // Firestore/Firebase transient backend & connectivity conditions.
+  if (error is FirebaseException) {
+    const transientCodes = {
+      'unavailable', // backend unreachable / offline — the top crash
+      'deadline-exceeded', // request outlived its deadline
+      'cancelled', // client cancelled (e.g. widget disposed mid-read)
+      'aborted', // contention; safe to retry
+      'resource-exhausted', // transient quota/backoff
+      'internal', // transient server-side blip
+      'network-request-failed', // no connectivity
+      'unknown', // usually a wrapped socket/IO failure
+    };
+    return transientCodes.contains(error.code);
+  }
+  // A plugin method invoked where no platform implementation is registered
+  // (background isolate, unsupported surface, or a race during app update).
+  if (error is MissingPluginException) return true;
+  // Our own bounded operations (getToken/subscribeToTopic/etc.) that timed out.
+  if (error is TimeoutException) return true;
+  return false;
+}
+
+/// Builds services and starts the app. Split out of [main] so it runs inside
+/// the guarded zone above.
+Future<void> _bootstrap() async {
   // Register the FCM background/terminated handler BEFORE runApp so pushes that
   // arrive while the app isn't foregrounded are handled. Synchronous, no
   // network — must reference a top-level function.
@@ -68,4 +186,7 @@ Future<void> main() async {
   unawaited(notifications.init());
   unawaited(pushMessaging.init());
   unawaited(subscriptions.configure());
+
+  // Fonts are now BUNDLED (see pubspec.yaml `fonts:`), so there is no runtime
+  // font fetch to warm up — the first frame already paints in Poppins/Inter.
 }

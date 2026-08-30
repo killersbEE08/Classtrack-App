@@ -49,6 +49,18 @@ final attendanceForSubjectProvider =
 String attendanceOccurrenceKey(String subjectId, String slot) =>
     '$subjectId#$slot';
 
+/// Deduped per-date records for a subject, memoized so the (non-trivial)
+/// [dedupeAttendanceRecords] pass runs at most ONCE per subject-stream emit and
+/// is shared by every consumer (today/weekly/daily aggregators), instead of
+/// each of them re-deduping the same records on every rebuild.
+final dedupedAttendanceForSubjectProvider =
+    Provider.family<List<AttendanceRecord>, String>((ref, subjectId) {
+  final records =
+      ref.watch(attendanceForSubjectProvider(subjectId)).valueOrNull ??
+          const [];
+  return dedupeAttendanceRecords(records);
+});
+
 /// Given today's session start-times and the slots already marked today,
 /// returns the next slot to mark: the first unmarked session; if every session
 /// is already marked, the last one (so a re-tap corrects it rather than adding);
@@ -70,9 +82,8 @@ final todayStatusProvider = Provider<Map<String, AttendanceStatus>>((ref) {
   final subjects = ref.watch(subjectsStreamProvider).valueOrNull ?? const [];
   final map = <String, AttendanceStatus>{};
   for (final s in subjects) {
-    final records =
-        ref.watch(attendanceForSubjectProvider(s.id)).valueOrNull ?? const [];
-    for (final r in dedupeAttendanceRecords(records)) {
+    final records = ref.watch(dedupedAttendanceForSubjectProvider(s.id));
+    for (final r in records) {
       if (r.dateId == todayId && r.status != AttendanceStatus.unmarked) {
         map[attendanceOccurrenceKey(s.id, r.slot)] = r.status;
       }
@@ -90,9 +101,8 @@ final weeklyAttendanceProvider = Provider<AttendanceStats>((ref) {
   final subjects = ref.watch(subjectsStreamProvider).valueOrNull ?? const [];
   var present = 0, absent = 0, cancelled = 0;
   for (final s in subjects) {
-    final records =
-        ref.watch(attendanceForSubjectProvider(s.id)).valueOrNull ?? const [];
-    for (final r in dedupeAttendanceRecords(records)) {
+    final records = ref.watch(dedupedAttendanceForSubjectProvider(s.id));
+    for (final r in records) {
       if (r.date.isBefore(weekStart)) continue;
       switch (r.status) {
         case AttendanceStatus.present:
@@ -111,6 +121,43 @@ final weeklyAttendanceProvider = Provider<AttendanceStats>((ref) {
   }
   return AttendanceStats(
       present: present, absent: absent, cancelled: cancelled);
+});
+
+/// A single day's attendance tally aggregated across every subject.
+typedef DayAttendance = ({int present, int absent, int cancelled});
+
+/// Per-day attendance tallies keyed by [DateUtilsX.dateId] ("yyyy-MM-dd"),
+/// aggregated across all subjects from their dated records. Powers the month
+/// [AttendanceCalendar]. Cancelled classes are tracked separately so they can
+/// render as "No class" without affecting the attended percentage.
+final dailyAttendanceProvider = Provider<Map<String, DayAttendance>>((ref) {
+  final subjects = ref.watch(subjectsStreamProvider).valueOrNull ?? const [];
+  final map = <String, DayAttendance>{};
+  for (final s in subjects) {
+    final records = ref.watch(dedupedAttendanceForSubjectProvider(s.id));
+    for (final r in records) {
+      final cur = map[r.dateId] ?? (present: 0, absent: 0, cancelled: 0);
+      map[r.dateId] = switch (r.status) {
+        AttendanceStatus.present => (
+            present: cur.present + 1,
+            absent: cur.absent,
+            cancelled: cur.cancelled
+          ),
+        AttendanceStatus.absent => (
+            present: cur.present,
+            absent: cur.absent + 1,
+            cancelled: cur.cancelled
+          ),
+        AttendanceStatus.cancelled => (
+            present: cur.present,
+            absent: cur.absent,
+            cancelled: cur.cancelled + 1
+          ),
+        AttendanceStatus.unmarked => cur,
+      };
+    }
+  }
+  return map;
 });
 
 /// Controller for adjusting attendance — both quick counters (Progress screen)
@@ -147,8 +194,15 @@ class AttendanceController {
       _repo?.adjust(subjectId, absentDelta: delta);
 
   Future<void> setCounts(String subjectId, int attended, int absent,
-          {int? cancelled}) async =>
-      _repo?.setAttendance(subjectId, attended, absent, cancelled: cancelled);
+          {int? cancelled,
+          int minAttended = 0,
+          int minAbsent = 0,
+          int minCancelled = 0}) async =>
+      _repo?.setAttendance(subjectId, attended, absent,
+          cancelled: cancelled,
+          minAttended: minAttended,
+          minAbsent: minAbsent,
+          minCancelled: minCancelled);
 
   // --- Per-date marking (writes a dated record + reconciles counters) ---------
 

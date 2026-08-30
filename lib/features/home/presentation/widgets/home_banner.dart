@@ -76,7 +76,8 @@ class _BannerCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(20),
             image: hasImage
                 ? DecorationImage(
-                    image: NetworkImage(banner.imageUrl!),
+                    image: ResizeImage(NetworkImage(banner.imageUrl!),
+                        width: 1080),
                     fit: BoxFit.cover,
                   )
                 : null,

@@ -58,6 +58,8 @@ function validResource(uid, overrides = {}) {
     organization: "Acme",
     status: "active",
     applicationUrl: "https://acme.example/apply",
+    benefits: "Paid stipend and mentorship.",
+    howToApply: "Apply on the Acme site before the deadline.",
     priority: 10,
     updatedBy: uid,
     ...overrides,
@@ -120,6 +122,49 @@ test("editor CAN save an incomplete DRAFT (not published)", async () => {
         status: "draft",
         applicationUrl: "",
         organization: "",
+      })
+    )
+  );
+});
+
+test("editor CANNOT publish an opportunity missing benefits / how-to-apply", async () => {
+  await assertFails(
+    setDoc(
+      doc(editor(), "resources/r8a"),
+      validResource("editor1", { benefits: "", howToApply: "" })
+    )
+  );
+  // Missing just one of the two is still a block.
+  await assertFails(
+    setDoc(
+      doc(editor(), "resources/r8b"),
+      validResource("editor1", { howToApply: "" })
+    )
+  );
+});
+
+test("editor CAN save an incomplete opportunity as a DRAFT", async () => {
+  await assertSucceeds(
+    setDoc(
+      doc(editor(), "resources/r8c"),
+      validResource("editor1", {
+        status: "draft",
+        benefits: "",
+        howToApply: "",
+      })
+    )
+  );
+});
+
+test("editor CAN publish a discount WITHOUT benefits / how-to-apply", async () => {
+  await assertSucceeds(
+    setDoc(
+      doc(editor(), "resources/r8d"),
+      validResource("editor1", {
+        type: "discount",
+        affiliateUrl: "https://brand.example/deal",
+        benefits: "",
+        howToApply: "",
       })
     )
   );

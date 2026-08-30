@@ -48,7 +48,10 @@ class AppColors {
   static const Color lightSurfaceAlt = Color(0xFFF0EDFB);
   static const Color lightBorder = Color(0xFFE7E3F7);
   static const Color lightTextPrimary = Color(0xFF1B1C34);
-  static const Color lightTextSecondary = Color(0xFF7B7A94);
+  // Darkened from 0xFF7B7A94 (~3.9:1 on white — below WCAG AA) to 0xFF656478,
+  // which clears the 4.5:1 AA threshold for normal text on both the white
+  // surfaces and the lavender scaffold background while keeping the muted tone.
+  static const Color lightTextSecondary = Color(0xFF656478);
 
   // Neutrals — dark
   static const Color darkBg = Color(0xFF14152A);

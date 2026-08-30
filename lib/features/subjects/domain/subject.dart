@@ -25,6 +25,7 @@ class Subject {
   final String? professor;
   final int? credits;
   final String? classLink; // Zoom/Meet/Teams
+  final String? room; // default room / location
   final List<ResourceLink> resourceLinks;
 
   /// Counter-based attendance. Only classes you explicitly mark are counted:
@@ -57,6 +58,7 @@ class Subject {
     this.professor,
     this.credits,
     this.classLink,
+    this.room,
     this.resourceLinks = const [],
     this.attended = 0,
     this.absent = 0,
@@ -121,6 +123,7 @@ class Subject {
     String? professor,
     int? credits,
     String? classLink,
+    String? room,
     List<ResourceLink>? resourceLinks,
     int? attended,
     int? absent,
@@ -140,6 +143,7 @@ class Subject {
       professor: professor ?? this.professor,
       credits: credits ?? this.credits,
       classLink: classLink ?? this.classLink,
+      room: room ?? this.room,
       resourceLinks: resourceLinks ?? this.resourceLinks,
       attended: attended ?? this.attended,
       absent: absent ?? this.absent,
@@ -160,6 +164,7 @@ class Subject {
             : Validators.sanitizeText(professor, maxLength: 120),
         'credits': credits,
         'classLink': classLink,
+        'room': room,
         'resourceLinks': resourceLinks.map((e) => e.toMap()).toList(),
         'attended': attended,
         'absent': absent,
@@ -192,6 +197,7 @@ class Subject {
           : Validators.sanitizeText(map['professor'] as String, maxLength: 120),
       credits: (map['credits'] as num?)?.toInt(),
       classLink: map['classLink'] as String?,
+      room: map['room'] as String?,
       resourceLinks: ((map['resourceLinks'] as List<dynamic>?) ?? [])
           .whereType<Map<String, dynamic>>()
           .map(ResourceLink.fromMap)

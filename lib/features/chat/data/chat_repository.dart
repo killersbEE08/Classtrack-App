@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/chat_session.dart';
 
 /// CRUD for a user's saved AI chat conversations at
@@ -20,7 +21,7 @@ class ChatRepository {
       .orderBy('updatedAt', descending: true)
       .snapshots()
       .map((snap) =>
-          snap.docs.map((d) => ChatSession.fromMap(d.id, d.data())).toList());
+          parseDocsSafely(snap.docs, ChatSession.fromMap, context: 'chatSessions'));
 
   Future<void> save(ChatSession session) =>
       _col.doc(session.id).set(session.toMap(), SetOptions(merge: true));

@@ -21,6 +21,23 @@ class ClassTrackApp extends ConsumerWidget {
       darkTheme: AppTheme.dark(accent: accent),
       themeMode: themeMode,
       routerConfig: router,
+      // Honour the user's system font-size preference for accessibility, but
+      // clamp the range so very large scales don't clip fixed-height cards,
+      // chips and mark buttons (which caused overflow/ellipsis loss). Users who
+      // bump their device font size still get noticeably larger text (up to
+      // 1.3x); we just cap the extreme end where the dense dashboards break.
+      builder: (context, child) {
+        final mq = MediaQuery.of(context);
+        return MediaQuery(
+          data: mq.copyWith(
+            textScaler: mq.textScaler.clamp(
+              minScaleFactor: 0.9,
+              maxScaleFactor: 1.3,
+            ),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
     );
   }
 }

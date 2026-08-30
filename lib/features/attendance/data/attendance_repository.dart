@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/date_utils.dart';
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/attendance_record.dart';
 
 /// CRUD for users/{uid}/subjects/{subjectId}/attendance.
@@ -27,9 +28,11 @@ class AttendanceRepository {
 
   Stream<List<AttendanceRecord>> watchForSubject(String subjectId) {
     return _col(subjectId).snapshots().map(
-          (snap) => snap.docs
-              .map((d) => AttendanceRecord.fromMap(d.id, subjectId, d.data()))
-              .toList(),
+          (snap) => mapDocsSafely(
+            snap.docs,
+            (d) => AttendanceRecord.fromMap(d.id, subjectId, d.data()),
+            context: 'attendance',
+          ),
         );
   }
 

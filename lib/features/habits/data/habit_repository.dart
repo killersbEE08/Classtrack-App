@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/utils/date_utils.dart';
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/habit.dart';
 
 /// CRUD for users/{uid}/habits.
@@ -16,7 +17,7 @@ class HabitRepository {
 
   Stream<List<Habit>> watchHabits() {
     return _col.snapshots().map((snap) {
-      final list = snap.docs.map((d) => Habit.fromMap(d.id, d.data())).toList();
+      final list = parseDocsSafely(snap.docs, Habit.fromMap, context: 'habits');
       list.sort((a, b) {
         final ad = a.createdAt, bd = b.createdAt;
         if (ad == null && bd == null) return 0;

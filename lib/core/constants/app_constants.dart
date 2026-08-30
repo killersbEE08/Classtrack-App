@@ -5,6 +5,10 @@ class AppConstants {
   static const String appName = 'ClassTrack';
   static const String bundleId = 'com.classtracks.app';
 
+  /// User-facing app version shown in Settings. Keep this in sync with the
+  /// `version:` field in pubspec.yaml (the part before the `+` build number).
+  static const String appVersion = '1.0.37';
+
   // Google Sign-In: the OAuth 2.0 *Web* client ID (client_type 3 in
   // google-services.json). Passing this explicitly to GoogleSignIn makes the
   // native SDK request an ID token directly, instead of relying on the
@@ -23,6 +27,26 @@ class AppConstants {
   /// Read-only: ClassTrack only ever reads tasks, never writes.
   static const String googleTasksScope =
       'https://www.googleapis.com/auth/tasks.readonly';
+
+  /// OAuth scope requested for two-way sync (ClassTrack Pro): lets the app
+  /// WRITE events into the user's Google Calendar (push classes, exams and
+  /// task deadlines). Scoped to events only — it cannot read or change calendar
+  /// sharing/settings.
+  static const String googleCalendarWriteScope =
+      'https://www.googleapis.com/auth/calendar.events';
+
+  /// How many days into the PAST a Google Calendar/Tasks import may reach.
+  /// Product rule: never pull items older than the last week, so a re-import
+  /// (and the daily auto-sync) only ever brings in the current, relevant window
+  /// instead of dredging up months of stale events.
+  static const int googleImportBackDays = 7;
+
+  /// How many days AHEAD a Google Calendar import looks (upcoming events).
+  static const int googleImportForwardDays = 60;
+
+  /// Local hour-of-day (24h) at which the once-daily background Google
+  /// Calendar/Tasks auto-sync becomes eligible to run. 19 == 7 PM.
+  static const int googleAutoSyncHour = 19;
 
   // Defaults
   static const double defaultTargetAttendance = 75.0;
@@ -51,6 +75,18 @@ class AppConstants {
   static const String savedResourcesCollection = 'savedResources';
   // CMS-composed targeted notification queue (processed by a Cloud Function).
   static const String notificationsCollection = 'notifications';
+  // User-submitted content reports (moderation queue).
+  static const String reportsCollection = 'reports';
+  // Analytics: append-only engagement events + backend-aggregated counters.
+  static const String eventsCollection = 'events';
+  static const String resourceMetricsCollection = 'resourceMetrics';
+  static const String metricsDailyCollection = 'metricsDaily';
+  // Aggregate user-base counts for notification recipient estimates.
+  static const String audienceCountsCollection = 'audienceCounts';
+  // Managed content taxonomy (opportunity/discount categories).
+  static const String categoriesCollection = 'categories';
+  // Uploaded media library (index of Cloud Storage assets).
+  static const String mediaAssetsCollection = 'mediaAssets';
 
   // Cloud Function
   static const String parseScheduleFunction = 'parseSchedule';
@@ -82,10 +118,35 @@ class AppConstants {
   static const String prefsGeminiKey = 'gemini_api_key';
   static const String prefsReminderLead = 'reminder_lead_minutes';
   static const String prefsRemindersEnabled = 'reminders_enabled';
-  static const String prefsGpaScale = 'gpa_scale'; // 'four' or 'ten'
+  // Google Calendar/Tasks daily auto-sync (per user):
+  //  • whether the once-daily 7 PM background sync is enabled (default ON);
+  //  • whether this account has connected Google at least once (set after the
+  //    first successful manual import) — the silent sync only runs once this is
+  //    true, so it can reuse the already-granted OAuth scopes without ever
+  //    popping an interactive account/consent prompt;
+  //  • the yyyy-MM-dd of the last successful auto-sync, so it runs at most once
+  //    per calendar day.
+  static const String prefsGoogleAutoSync = 'google_auto_sync_enabled';
+  static const String prefsGoogleAutoSyncConnected = 'google_auto_sync_connected';
+  static const String prefsGoogleAutoSyncLastDate = 'google_auto_sync_last_date';
+  // Two-way sync (Pro): when enabled, the daily auto-sync ALSO pushes the
+  // user's ClassTrack classes, exams and task deadlines back into their Google
+  // Calendar. Opt-in (default off) so nothing is ever written without consent.
+  static const String prefsGoogleAutoPush = 'google_auto_push_enabled';  static const String prefsGpaScale = 'gpa_scale'; // 'four' or 'ten'
   static const String prefsCurrency = 'currency_symbol';
   static const String prefsMonthlyBudget = 'monthly_budget';
   static const String prefsAccentColor = 'accent_color'; // ARGB int, 0 = default
+  // Home "Quick tools" personalisation (per user):
+  //  • ordered CSV of all tool keys in the user's chosen order;
+  //  • CSV of hidden tool keys.
+  static const String prefsQuickToolsOrder = 'quick_tools_order';
+  static const String prefsQuickToolsHidden = 'quick_tools_hidden';
+  // Home notification bell "seen" state (per user):
+  //  • timestamp (millis) of when notifications were last viewed — anything
+  //    published after it counts as a new match;
+  //  • CSV of announcement (banner) ids the user has already seen.
+  static const String prefsNotifSeenAt = 'notif_seen_at';
+  static const String prefsAnnouncementsSeen = 'announcements_seen';
 
   // Notification preferences
   static const String prefsNotifyClasses = 'notify_classes';

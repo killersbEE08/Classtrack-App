@@ -7,10 +7,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:receive_sharing_intent/receive_sharing_intent.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/providers/app_settings_provider.dart';
+import '../../../../core/utils/shared_intake.dart';
 import '../../../../services/analytics_service.dart';
+import '../../../../services/calendar_auto_sync.dart';
 import '../../../../services/notification_service.dart';
 import '../../../../services/push_messaging_service.dart';
 import '../../../../services/reminder_scheduler.dart';
@@ -231,16 +234,29 @@ class _HomeShellState extends ConsumerState<HomeShell>
   final GlobalKey _fabKey = GlobalKey();
   final GlobalKey _navKey = GlobalKey();
 
-  /// Live overlay entry for the tour (null when not showing). Guards against
-  /// starting it twice.
-  OverlayEntry? _tourEntry;
+  /// Guards against showing the tour twice at once.
+  bool _tourShowing = false;
 
   /// Live subscription to links/text shared into the app while it's running.
   StreamSubscription<List<SharedMediaFile>>? _shareSub;
 
+  /// Periodic check that fires the daily 7 PM Google auto-sync while the app is
+  /// open across the trigger time. Self-gated in [CalendarAutoSyncController] to
+  /// run at most once per day.
+  Timer? _autoSyncTimer;
+
   /// Guards against opening the share sheet twice for the same share (the
   /// initial-media and stream callbacks can otherwise overlap).
   bool _handlingShare = false;
+
+  /// Signature of the last shared payload we actually handled, persisted so a
+  /// stale cold-start re-delivery of the same link (see [SharedIntake]) is not
+  /// processed again. `null` until loaded from disk.
+  String? _lastHandledShare;
+
+  /// SharedPreferences key backing [_lastHandledShare]. Device-global (share
+  /// intake is not user-scoped) so it works signed-out too.
+  static const String _lastSharePrefsKey = 'last_handled_share_sig';
 
   static const _screens = [
     DashboardScreen(),
@@ -259,6 +275,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _onNotificationPayload());
     _initShareIntake();
+    // Kick the daily Google auto-sync check on launch, then re-check every 15
+    // minutes so it also fires if the app is left open across 7 PM. The
+    // controller self-gates (once per day, on/after 7 PM, connected accounts).
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoSync());
+    _autoSyncTimer = Timer.periodic(
+      const Duration(minutes: 15),
+      (_) => _maybeAutoSync(),
+    );
     // NOTE: The first-run coach-mark tour is NO LONGER auto-launched on
     // startup. On some devices/renderers (e.g. Impeller/Vulkan) the root
     // overlay could fail to lay out and leave a full-screen scrim that blocked
@@ -293,50 +317,40 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
   }
 
-  /// Inserts the coach-mark tour into the root overlay. Marks the tour as seen
-  /// when the user finishes or skips it.
-  void _startTour() {
-    if (!mounted || _tourEntry != null) return;
-    final overlay = Overlay.of(context, rootOverlay: true);
-    final entry = OverlayEntry(
-      builder: (_) => HomeTour(
-        steps: [
-          const TourStep(
-            title: 'Welcome to ClassTrack 👋',
-            body:
-                "Here's a quick 20-second tour of the essentials. You can skip "
-                'anytime.',
-            icon: Icons.waving_hand_rounded,
-          ),
-          TourStep(
-            key: _navKey,
-            title: 'Move around',
-            body:
-                'Switch between Home, Schedule, Opportunities and Attendance '
-                'from this bar — it stays with you everywhere.',
-            icon: Icons.dashboard_rounded,
-          ),
-          TourStep(
-            key: _fabKey,
-            title: 'Add anything, fast',
-            body:
-                'Tap + to quickly add a task, class, event, exam, grade, note, '
-                'habit or expense.',
-            icon: Icons.add_circle_rounded,
-            circle: true,
-          ),
-        ],
-        onFinish: _finishTour,
-      ),
+  /// Shows the home walkthrough as a safe, dismissible bottom sheet and marks
+  /// it seen when closed.
+  Future<void> _startTour() async {
+    if (!mounted || _tourShowing) return;
+    _tourShowing = true;
+    await showHomeTour(
+      context,
+      steps: const [
+        TourStep(
+          title: 'Welcome to ClassTrack 👋',
+          body:
+              "Here's a quick tour of the essentials. You can skip anytime.",
+          icon: Icons.waving_hand_rounded,
+        ),
+        TourStep(
+          title: 'Move around',
+          body:
+              'Switch between Home, Schedule, Opportunities and Attendance from '
+              'the bar at the bottom — it stays with you everywhere.',
+          icon: Icons.dashboard_rounded,
+        ),
+        TourStep(
+          title: 'Add anything, fast',
+          body:
+              'Tap the + button to quickly add a task, class, event, exam, '
+              'grade, note, habit or expense.',
+          icon: Icons.add_circle_rounded,
+        ),
+      ],
+      onFinish: () {
+        _tourShowing = false;
+        if (mounted) ref.read(homeTourDoneProvider.notifier).complete();
+      },
     );
-    _tourEntry = entry;
-    overlay.insert(entry);
-  }
-
-  void _finishTour() {
-    _tourEntry?.remove();
-    _tourEntry = null;
-    ref.read(homeTourDoneProvider.notifier).complete();
   }
 
   /// Listens for URLs/text shared into ClassTrack (Android/iOS share sheet) and
@@ -345,23 +359,45 @@ class _HomeShellState extends ConsumerState<HomeShell>
   void _initShareIntake() {
     if (kIsWeb || !(Platform.isAndroid || Platform.isIOS)) return;
     try {
+      // Load the last-handled signature first so the very first cold-start
+      // delivery can be de-duplicated against it.
+      SharedPreferences.getInstance().then((prefs) {
+        _lastHandledShare = prefs.getString(_lastSharePrefsKey);
+      }).catchError((_) {});
+
+      // Live shares received while the app is running are always genuine.
       _shareSub = ReceiveSharingIntent.instance
           .getMediaStream()
-          .listen(_onShared, onError: (_) {});
-      // Handle a share that cold-started the app.
+          .listen((files) => _onShared(files, isColdStart: false),
+              onError: (_) {});
+      // A share that cold-started the app. Some launchers re-attach the
+      // original ACTION_SEND intent to the task, so this can also fire on a
+      // plain relaunch — [_onShared] de-duplicates those.
       ReceiveSharingIntent.instance.getInitialMedia().then((files) {
         if (files.isNotEmpty) {
-          _onShared(files);
-          ReceiveSharingIntent.instance.reset();
+          _onShared(files, isColdStart: true);
         }
+        // Always clear the plugin's cached initial media so it can't be
+        // re-emitted to a future engine attach within this process.
+        ReceiveSharingIntent.instance.reset();
       }).catchError((_) {});
     } catch (_) {
       // Platform channel unavailable — ignore, sharing is a bonus path.
     }
   }
 
+  /// Persists [signature] as the most recently handled share so an identical
+  /// cold-start re-delivery is ignored next time.
+  Future<void> _rememberHandledShare(String signature) async {
+    _lastHandledShare = signature;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lastSharePrefsKey, signature);
+    } catch (_) {/* best-effort */}
+  }
+
   /// Opens the pre-filled "New item" sheet for the first text/URL item shared.
-  void _onShared(List<SharedMediaFile> files) {
+  void _onShared(List<SharedMediaFile> files, {required bool isColdStart}) {
     if (files.isEmpty || !mounted || _handlingShare) return;
     final shared = files.firstWhere(
       (f) => f.type == SharedMediaType.text || f.type == SharedMediaType.url,
@@ -369,6 +405,15 @@ class _HomeShellState extends ConsumerState<HomeShell>
     );
     final text = shared.path.trim();
     if (text.isEmpty) return;
+    // Skip a stale cold-start re-delivery of a link we already handled.
+    if (!SharedIntake.shouldHandle(
+      text: text,
+      isColdStart: isColdStart,
+      lastHandled: _lastHandledShare,
+    )) {
+      return;
+    }
+    final signature = SharedIntake.signature(text);
     _handlingShare = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) {
@@ -377,17 +422,28 @@ class _HomeShellState extends ConsumerState<HomeShell>
       }
       try {
         await openSharedLinkEditor(context, text);
+        // Record only after the sheet was actually presented, so a delivery
+        // that raced with a transient unmount (and never showed a sheet) can
+        // still be retried — while a later cold-start re-delivery of this same
+        // link is recognised as already-handled and ignored.
+        await _rememberHandledShare(signature);
       } finally {
         _handlingShare = false;
       }
     });
   }
 
+  /// Fires the daily Google Calendar/Tasks auto-sync if it's due. Safe to call
+  /// often — the controller runs the actual sync at most once per day.
+  void _maybeAutoSync() {
+    if (!mounted) return;
+    ref.read(calendarAutoSyncProvider).maybeSync();
+  }
+
   @override
   void dispose() {
-    _tourEntry?.remove();
-    _tourEntry = null;
     _shareSub?.cancel();
+    _autoSyncTimer?.cancel();
     NotificationService.selectedPayload.removeListener(_onNotificationPayload);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -468,6 +524,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // subscription stops showing Pro promptly instead of lingering.
     if (state == AppLifecycleState.resumed) {
       ref.read(subscriptionServiceProvider).refresh(invalidateCache: true);
+      // Returning to the app is a good moment to run the daily Google sync if
+      // it's now due (e.g. the app was backgrounded before 7 PM).
+      _maybeAutoSync();
     }
   }
 
@@ -476,7 +535,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // Replay support: when the tour is re-armed from Settings (flag flips back
     // to false), show it again.
     ref.listen<bool>(homeTourDoneProvider, (prev, next) {
-      if (next == false && _tourEntry == null) {
+      if (next == false && !_tourShowing) {
         WidgetsBinding.instance.addPostFrameCallback((_) => _startTour());
       }
     });
@@ -547,7 +606,8 @@ class _CenterFabState extends State<_CenterFab>
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return RepaintBoundary(
+      child: Padding(
       padding: const EdgeInsets.only(top: 26),
       child: GestureDetector(
         onTapDown: (_) => setState(() => _scale = 0.88),
@@ -601,6 +661,7 @@ class _CenterFabState extends State<_CenterFab>
               .fadeIn(duration: 280.ms),
         ),
       ),
+    ),
     );
   }
 }

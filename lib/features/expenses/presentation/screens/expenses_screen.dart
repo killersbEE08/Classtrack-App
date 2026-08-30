@@ -141,7 +141,9 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> {
             expensesAsync.when(
               loading: () => const Padding(
                   padding: EdgeInsets.only(top: 30), child: LoadingView()),
-              error: (e, _) => ErrorView(error: e),
+              error: (e, _) => ErrorView(
+                  error: e,
+                  onRetry: () => ref.invalidate(expensesStreamProvider)),
               data: (_) {
                 if (monthExpenses.isEmpty) return _empty(context);
                 if (filtered.isEmpty) {

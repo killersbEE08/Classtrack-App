@@ -24,6 +24,8 @@ import '../../../habits/domain/habit.dart';
 import '../../../habits/presentation/providers/habit_providers.dart';
 import '../../../notes/domain/note.dart';
 import '../../../notes/presentation/providers/note_providers.dart';
+import '../../../opportunities/domain/resource.dart';
+import '../../../opportunities/presentation/providers/opportunities_providers.dart';
 import '../../../schedule/domain/class_session.dart';
 import '../../../schedule/presentation/providers/schedule_providers.dart';
 import '../../../subjects/domain/subject.dart';
@@ -464,6 +466,55 @@ class ChatController extends StateNotifier<ChatState> {
             '- ${h.title} (${h.streak}-day streak, ${h.doneToday ? "done today" : "not done today"}).');
       }
     }
+    // Opportunities & Perks (from the CMS-managed `resources` feed), filtered
+    // to what the student can actually see (live + country-targeted), so the
+    // assistant can answer "what scholarships can I apply to?", "any Spotify
+    // deal?", "which perks save the most?" etc. from real, current data.
+    final allResources =
+        _ref.read(visibleResourcesProvider).valueOrNull ?? const <Resource>[];
+    final country = _ref.read(userProfileProvider).valueOrNull?.country;
+    final feed = allResources
+        .where((r) => r.isInActiveFeed && r.targetsCountry(country))
+        .toList();
+    final opportunities = feed.where((r) => !r.type.isDiscount).toList();
+    final perks = feed.where((r) => r.type.isDiscount).toList();
+    if (opportunities.isNotEmpty) {
+      sb.writeln('Opportunities available in the app (${opportunities.length}):');
+      for (final r in opportunities.take(30)) {
+        final parts = <String>['${r.type.label}: ${r.title} — ${r.organization}'];
+        if (r.deadline != null) {
+          final d = r.daysUntilDeadline;
+          parts.add('apply by ${DateUtilsX.prettyDate(r.deadline!)}'
+              '${d != null && d >= 0 ? " (in $d days)" : ""}');
+        }
+        if (r.eligibility != null && r.eligibility!.isNotEmpty) {
+          parts.add('eligibility: ${r.eligibility}');
+        }
+        if (r.paid == true) parts.add('paid/stipend');
+        if (r.remote == true) parts.add('remote');
+        if (r.applicationUrl != null && r.applicationUrl!.isNotEmpty) {
+          parts.add('link: ${r.applicationUrl}');
+        }
+        sb.writeln('- ${parts.join(' · ')}.');
+      }
+    }
+    if (perks.isNotEmpty) {
+      sb.writeln('Student perks/discounts available (${perks.length}):');
+      for (final r in perks.take(30)) {
+        final parts = <String>[r.brandName];
+        if (r.discountText != null && r.discountText!.isNotEmpty) {
+          parts.add(r.discountText!);
+        }
+        if (r.categories.isNotEmpty) parts.add(r.categories.join('/'));
+        if (r.redemptionInstructions != null &&
+            r.redemptionInstructions!.isNotEmpty) {
+          parts.add('how: ${r.redemptionInstructions}');
+        }
+        final url = r.affiliateUrl ?? r.applicationUrl;
+        if (url != null && url.isNotEmpty) parts.add('link: $url');
+        sb.writeln('- ${parts.join(' · ')}.');
+      }
+    }
     return sb.toString().trim();
   }
 
@@ -493,20 +544,26 @@ class ChatController extends StateNotifier<ChatState> {
         first(_ref.read(habitsStreamProvider.future)),
         first(_ref.read(examsStreamProvider.future)),
         first(_ref.read(studySessionsStreamProvider.future)),
+        first(_ref.read(visibleResourcesProvider.future)),
       ]).timeout(const Duration(seconds: 5));
     } catch (_) {
       // Ignore — fall back to whatever data is already available.
     }
   }
 
-  Future<void> send(String text, {Uint8List? image}) async {
+  Future<void> send(String text, {Uint8List? image, Uint8List? pdf, String? pdfName}) async {
     final trimmed = text.trim();
-    if (trimmed.isEmpty && image == null) return;
+    if (trimmed.isEmpty && image == null && pdf == null) return;
 
-    _append(ChatMessage(role: ChatRole.user, text: trimmed, image: image));
+    _append(ChatMessage(
+      role: ChatRole.user,
+      text: trimmed,
+      image: image,
+      pdfName: pdf != null ? (pdfName ?? 'timetable.pdf') : null,
+    ));
 
     // Feature-usage analytics (never blocks the chat).
-    _ref.read(analyticsProvider).aiMessage(hasImage: image != null);
+    _ref.read(analyticsProvider).aiMessage(hasImage: image != null || pdf != null);
     // Feature discovery: the AI assistant has now been tried.
     _ref.read(featureUsageProvider.notifier).markUsed(FeatureId.aiAssistant);
 
@@ -548,6 +605,13 @@ class ChatController extends StateNotifier<ChatState> {
               'mimeType': 'image/jpeg',
             }
           },
+        if (pdf != null)
+          {
+            'inlineData': {
+              'data': base64Encode(pdf),
+              'mimeType': 'application/pdf',
+            }
+          },
       ];
       _history.add({'role': 'user', 'parts': parts});
 
@@ -557,12 +621,16 @@ class ChatController extends StateNotifier<ChatState> {
       await _ensureDataLoaded();
 
       final reply = await _gemini.chat(_history, context: _buildContext());
-      _history.add({
-        'role': 'model',
-        'parts': [
-          {'text': reply}
-        ]
-      });
+      // NOTE: the model turn is appended to `_history` AFTER we've computed the
+      // cleaned, user-visible prose (see below). We deliberately store that
+      // prose — NOT the raw reply — so the transcript we replay on later turns
+      // matches what the user actually saw. Feeding the raw reply back (with
+      // its ```actions```/```schedule``` fences and premature "Done — …" lines)
+      // pollutes the multi-turn context: the model sees stale action JSON that
+      // no longer matches the fresh data snapshot in `_buildContext()`, and in
+      // longer chats it starts echoing confirmations without emitting the
+      // action block — i.e. it "says done" but nothing runs. Storing the clean
+      // prose keeps every turn as trustworthy as a brand-new chat.
 
       final schedule = GeminiService.extractScheduleFromReply(reply);
       if (schedule != null) {
@@ -570,6 +638,7 @@ class ChatController extends StateNotifier<ChatState> {
       }
       final actions = GeminiService.extractActionsFromReply(reply);
       ActionOutcome? outcome;
+      List<Map<String, dynamic>> pendingDeletes = const [];
       if (actions.isNotEmpty) {
         // When the assistant also proposes a reviewable schedule, the user
         // confirms and commits it from the review card. Auto-executing
@@ -584,7 +653,14 @@ class ChatController extends StateNotifier<ChatState> {
                 final t = (a['type'] as String?)?.trim();
                 return t != 'subject' && t != 'class';
               }).toList();
-        if (toRun.isNotEmpty) outcome = await _executeActions(toRun);
+        // SECURITY: destructive deletes are NEVER auto-run. They're held and
+        // shown as a confirmation card so a prompt-injection (e.g. from a
+        // shared image/text) can't silently wipe the user's data. Everything
+        // else (create/update/etc.) still runs silently as before.
+        pendingDeletes = toRun.where(_isDestructiveAction).toList();
+        final safe =
+            toRun.where((a) => !_isDestructiveAction(a)).toList();
+        if (safe.isNotEmpty) outcome = await _executeActions(safe);
       }
       var cleaned = GeminiService.stripScheduleBlock(reply);
       cleaned = GeminiService.stripActionsBlock(cleaned);
@@ -594,16 +670,24 @@ class ChatController extends StateNotifier<ChatState> {
       cleaned = GeminiService.stripAllCodeFences(cleaned);
       cleaned = GeminiService.stripBareActionsJson(cleaned);
       final prose = _cleanMarkdown(cleaned);
-      var finalText = prose.isEmpty
-          ? (schedule != null
-              ? 'I put together a schedule below — tap to review it.'
-              : (actions.isNotEmpty ? 'Done — updated for you. ✅' : 'Okay!'))
-          : prose;
+      final hasPending = pendingDeletes.isNotEmpty;
+      // When deletes are pending we IGNORE the model's prose (it sometimes
+      // prematurely says "Done — deleted…") and show a neutral confirmation
+      // prompt instead, so the UI never claims a deletion that hasn't happened.
+      var finalText = hasPending
+          ? 'Just to be safe, please confirm below before I delete anything.'
+          : prose.isEmpty
+              ? (schedule != null
+                  ? 'I put together a schedule below — tap to review it.'
+                  : (outcome != null ? 'Done — updated for you. ✅' : 'Okay!'))
+              : prose;
       // Honesty guard: the model sometimes says "Done — removed all subjects"
       // even when its action matched nothing (e.g. a "delete all" it couldn't
       // express, or a bad title). If we ran actions but changed nothing, don't
-      // echo that false confirmation — tell the user the truth instead.
+      // echo that false confirmation — tell the user the truth instead. Skipped
+      // when there are pending deletes (nothing was claimed done yet).
       if (schedule == null &&
+          !hasPending &&
           outcome != null &&
           outcome.attempted > 0 &&
           outcome.succeeded == 0) {
@@ -611,10 +695,21 @@ class ChatController extends StateNotifier<ChatState> {
             "I couldn't find anything matching that in your data, so nothing "
             'was changed. Could you tell me exactly which item you mean?';
       }
+      // Store the CLEANED, user-visible reply as the model turn (see the note
+      // where `reply` is fetched above). This keeps the replayed transcript
+      // free of stale action/schedule JSON so multi-turn chats stay accurate.
+      _history.add({
+        'role': 'model',
+        'parts': [
+          {'text': finalText}
+        ]
+      });
       _append(ChatMessage(
         role: ChatRole.assistant,
         text: finalText,
         schedule: schedule,
+        pendingActions: hasPending ? pendingDeletes : null,
+        pendingSummary: hasPending ? _describeDeletions(pendingDeletes) : null,
       ));
       // Count this successful message toward the free monthly limit.
       if (!isPro) {
@@ -642,6 +737,63 @@ class ChatController extends StateNotifier<ChatState> {
   }
 
   // --- Invisible function calling --------------------------------------------
+
+  /// Whether an emitted action is destructive (removes user data). Only
+  /// `delete` qualifies — creates/updates are reversible edits and still run
+  /// silently. Deletes (single or "delete all") are held for confirmation.
+  bool _isDestructiveAction(Map<String, dynamic> a) =>
+      (a['type']?.toString().trim()) == 'delete';
+
+  /// Human-readable summary of the deletions awaiting confirmation, e.g.
+  /// "all your tasks" or "exam \"DP-800\"". Shown on the confirmation card.
+  String _describeDeletions(List<Map<String, dynamic>> deletes) {
+    String describe(Map<String, dynamic> a) {
+      final entity = (a['entity']?.toString().trim());
+      final label = (entity == null || entity.isEmpty) ? 'item' : entity;
+      if (a['all'] == true) return 'all your ${label}s';
+      final match = a['match']?.toString().trim();
+      final subject = a['subject']?.toString().trim();
+      if (match != null && match.isNotEmpty) return '$label "$match"';
+      if (subject != null && subject.isNotEmpty) return '$label for $subject';
+      return 'a $label';
+    }
+
+    return deletes.map(describe).join(', ');
+  }
+
+  /// Runs the destructive actions the user explicitly confirmed on [message],
+  /// then clears the pending state on that message and reports what changed.
+  Future<void> confirmPendingActions(ChatMessage message) async {
+    final actions = message.pendingActions;
+    if (actions == null || actions.isEmpty) return;
+    _clearPending(message);
+    final outcome = await _executeActions(actions);
+    _append(ChatMessage(
+      role: ChatRole.assistant,
+      text: outcome.succeeded > 0
+          ? 'Done — deleted ${outcome.succeeded} item${outcome.succeeded == 1 ? '' : 's'}. ✅'
+          : "I couldn't find anything matching that, so nothing was deleted.",
+    ));
+    await _persistSession();
+  }
+
+  /// Discards the pending deletions on [message] without running them.
+  void cancelPendingActions(ChatMessage message) {
+    _clearPending(message);
+    _append(const ChatMessage(
+      role: ChatRole.assistant,
+      text: 'No problem — I left everything as it is.',
+    ));
+  }
+
+  /// Replaces [message] in the visible transcript with a copy that has no
+  /// pending actions, so the confirmation card collapses and can't fire twice.
+  void _clearPending(ChatMessage message) {
+    state = state.copyWith(messages: [
+      for (final m in state.messages)
+        identical(m, message) ? m.withoutPending() : m,
+    ]);
+  }
 
   /// Runs the structured actions the assistant emitted, updating Firestore/UI
   /// silently. Failures are swallowed so a bad action never derails the chat.
@@ -830,9 +982,27 @@ class ChatController extends StateNotifier<ChatState> {
     };
     if (status == null) return false;
     final date = _parseDate(a['date'] as String?) ?? DateTime.now();
-    await _ref
-        .read(attendanceControllerProvider)
-        .setForDate(subjectId, date, status);
+    final controller = _ref.read(attendanceControllerProvider);
+
+    // Mark each scheduled occurrence of this subject on [date] keyed by its
+    // session start time — the SAME per-occurrence key the home timeline and
+    // subject screen use — so a mark made by the AI shows up everywhere (the
+    // timeline tile flips out of its "tap to mark" state instead of lingering).
+    // Falls back to a subject-level mark only when the subject has no scheduled
+    // session that day.
+    final day = DateTime(date.year, date.month, date.day);
+    final slots = _ref
+        .read(classesForDayProvider(day))
+        .where((c) => c.subject.id == subjectId)
+        .map((c) => c.session.startTime)
+        .toSet();
+    if (slots.isEmpty) {
+      await controller.setForDate(subjectId, date, status);
+    } else {
+      for (final slot in slots) {
+        await controller.setForOccurrence(subjectId, date, slot, status);
+      }
+    }
     return true;
   }
 

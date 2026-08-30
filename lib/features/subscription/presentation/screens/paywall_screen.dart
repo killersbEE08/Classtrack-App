@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../shared/widgets/illustrations.dart';
 import '../../data/subscription_service.dart';
 import '../../domain/pro_constants.dart';
 import '../../domain/pro_features.dart';
@@ -249,27 +250,9 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 22),
-              Container(
-                width: 66,
-                height: 66,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.18),
-                  shape: BoxShape.circle,
-                  border:
-                      Border.all(color: Colors.white.withValues(alpha: 0.35)),
-                ),
-                child: const Icon(Icons.workspace_premium_rounded,
-                    color: Colors.white, size: 36),
-              )
-                  .animate()
-                  .scale(
-                      begin: const Offset(0.6, 0.6),
-                      end: const Offset(1, 1),
-                      duration: 420.ms,
-                      curve: Curves.easeOutBack)
-                  .fadeIn(),
-              const SizedBox(height: 18),
+              const SizedBox(height: 10),
+              const Center(child: PremiumIllustration(height: 140)),
+              const SizedBox(height: 14),
               Text('Unlock your best\nsemester yet.',
                       style: theme.textTheme.headlineMedium?.copyWith(
                           color: Colors.white,

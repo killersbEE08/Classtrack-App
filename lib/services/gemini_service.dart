@@ -20,10 +20,20 @@ class GeminiService {
   Future<ParsedSchedule> parseSchedule({
     String? text,
     Uint8List? imageBytes,
+    Uint8List? pdfBytes,
   }) async {
     final Map<String, dynamic> payload;
     if (text != null && text.trim().isNotEmpty) {
       payload = {'sourceType': 'text', 'text': text};
+    } else if (pdfBytes != null) {
+      // A PDF timetable (e.g. an exported college schedule). Gemini reads PDFs
+      // natively, so we send the raw bytes inline with the PDF mime type and
+      // the backend `parseSchedule` function forwards them to the model.
+      payload = {
+        'sourceType': 'pdf',
+        'inlineData': base64Encode(pdfBytes),
+        'mimeType': 'application/pdf',
+      };
     } else if (imageBytes != null) {
       payload = {
         'sourceType': 'image',

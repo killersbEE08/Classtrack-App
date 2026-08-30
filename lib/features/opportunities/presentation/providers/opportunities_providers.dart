@@ -46,6 +46,9 @@ final opportunitiesFeedProvider = Provider<List<Resource>>((ref) {
   final user = ref.watch(userProfileProvider).valueOrNull;
   final list = ResourceQueries.feed(all, country: user?.country)
       .where((r) => !r.type.isDiscount)
+      // Editorial control (P1 §12): admins can exclude a resource from
+      // algorithmic recommendations without hiding it from browse.
+      .where((r) => r.recommendationEligible)
       .toList();
   return ref.watch(recommenderProvider).rank(list, user);
 });

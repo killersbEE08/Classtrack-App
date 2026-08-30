@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../shared/widgets/ui_kit.dart';
+import '../../domain/cms_analytics.dart';
 import '../../domain/marketing.dart';
+import '../providers/cms_analytics_providers.dart';
 import '../providers/cms_marketing_providers.dart';
 
 class CmsCampaignsScreen extends ConsumerWidget {
@@ -14,6 +16,11 @@ class CmsCampaignsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final async = ref.watch(cmsCampaignsProvider);
+    final metrics = {
+      for (final m in ref.watch(cmsResourceMetricsProvider).valueOrNull ??
+          const <ResourceMetric>[])
+        m.id: m
+    };
 
     void openEditor(Campaign? c) => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => CmsCampaignEditorScreen(existing: c)));
@@ -23,10 +30,15 @@ class CmsCampaignsScreen extends ConsumerWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(28, 24, 28, 12),
-          child: Row(
+          // Wrap (not Row+Spacer) so the action button drops below the title on
+          // narrow/mobile widths instead of overflowing off the right edge.
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 12,
             children: [
               Text('Campaigns', style: theme.textTheme.headlineSmall),
-              const Spacer(),
               FilledButton.icon(
                 style:
                     FilledButton.styleFrom(backgroundColor: AppColors.primary),
@@ -85,6 +97,10 @@ class CmsCampaignsScreen extends ConsumerWidget {
                                     overflow: TextOverflow.ellipsis,
                                     style: theme.textTheme.bodySmall
                                         ?.copyWith(color: theme.hintColor)),
+                                if (c.resourceId != null &&
+                                    metrics[c.resourceId] != null)
+                                  _CampaignMetricsRow(
+                                      totals: metrics[c.resourceId]!.totals),
                               ],
                             ),
                           ),
@@ -248,17 +264,12 @@ class _CmsCampaignEditorScreenState
       appBar: AppBar(
         title:
             Text(widget.existing == null ? 'New campaign' : 'Edit campaign'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: AppColors.primary),
-              onPressed: _saving ? null : _save,
-              icon: const Icon(Icons.save_rounded),
-              label: const Text('Save'),
-            ),
-          ),
-        ],
+      ),
+      bottomNavigationBar: CmsSaveBar(
+        saving: _saving,
+        isNew: widget.existing == null,
+        label: 'campaign',
+        onSave: _saving ? null : _save,
       ),
       body: Center(
         child: ConstrainedBox(
@@ -387,6 +398,45 @@ class _DateTile extends StatelessWidget {
             ? 'Not set'
             : '${value!.year}-${value!.month.toString().padLeft(2, '0')}-${value!.day.toString().padLeft(2, '0')}'),
       ),
+    );
+  }
+}
+
+
+/// Compact performance readout for a campaign's promoted resource, using the
+/// real per-resource engagement counters (all-time). Honest proxy — attributed
+/// to the linked resource, not synthetic campaign numbers.
+class _CampaignMetricsRow extends StatelessWidget {
+  final MetricTotals totals;
+  const _CampaignMetricsRow({required this.totals});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    Widget chip(IconData icon, String label, int value) => Padding(
+          padding: const EdgeInsets.only(right: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 13, color: theme.hintColor),
+              const SizedBox(width: 3),
+              Text('$value',
+                  style: theme.textTheme.labelSmall
+                      ?.copyWith(fontWeight: FontWeight.w700)),
+              const SizedBox(width: 3),
+              Text(label,
+                  style: theme.textTheme.labelSmall
+                      ?.copyWith(color: theme.hintColor)),
+            ],
+          ),
+        );
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(children: [
+        chip(Icons.visibility_rounded, 'views', totals.views),
+        chip(Icons.ads_click_rounded, 'clicks', totals.clicks),
+        chip(Icons.bookmark_rounded, 'saves', totals.saves),
+      ]),
     );
   }
 }

@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/study_session.dart';
 
 /// CRUD for users/{uid}/studySessions.
@@ -15,8 +16,8 @@ class StudyRepository {
 
   Stream<List<StudySession>> watchSessions() {
     return _col.snapshots().map((snap) {
-      final list =
-          snap.docs.map((d) => StudySession.fromMap(d.id, d.data())).toList();
+      final list = parseDocsSafely(snap.docs, StudySession.fromMap,
+          context: 'studySessions');
       list.sort((a, b) => b.startedAt.compareTo(a.startedAt));
       return list;
     });

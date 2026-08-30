@@ -71,6 +71,35 @@ class Resource {
   final List<String> targetCareerGoals;
   final List<int> targetAcademicYears;
 
+  // ── Extended content (P0 editor completeness) — all optional/additive ─────
+  /// Long-form body (the existing [description] is the short summary).
+  final String? fullDescription;
+  final String? officialWebsite;
+  final String? benefits;
+  final String? howToApply;
+  final String? requirements;
+
+  // Discount-specific extras (distinct from [discountText]/[redemptionInstructions]).
+  final String? discountCode;
+  final num? discountPercent;
+  final String? redemptionUrl;
+
+  // Scheduled publishing (enforced server-side; see functions).
+  final DateTime? scheduledPublishAt;
+  final DateTime? scheduledUnpublishAt;
+
+  // Editorial promotion controls (separate from algorithmic relevance).
+  final bool homepageEligible;
+  final bool recommendationEligible;
+
+  /// Manually-curated related resources (ids), to avoid dead-end detail pages.
+  final List<String> relatedResourceIds;
+
+  /// Server-owned URL health records keyed by field name (applicationUrl,
+  /// affiliateUrl, redemptionUrl, officialWebsite). Read-only on the client —
+  /// written by the URL-health Cloud Functions, never by [toMap].
+  final Map<String, UrlHealth> urlHealth;
+
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? publishedAt;
@@ -109,6 +138,20 @@ class Resource {
     this.targetInterests = const [],
     this.targetCareerGoals = const [],
     this.targetAcademicYears = const [],
+    this.fullDescription,
+    this.officialWebsite,
+    this.benefits,
+    this.howToApply,
+    this.requirements,
+    this.discountCode,
+    this.discountPercent,
+    this.redemptionUrl,
+    this.scheduledPublishAt,
+    this.scheduledUnpublishAt,
+    this.homepageEligible = false,
+    this.recommendationEligible = true,
+    this.relatedResourceIds = const [],
+    this.urlHealth = const {},
     this.createdAt,
     this.updatedAt,
     this.publishedAt,
@@ -192,6 +235,20 @@ class Resource {
         targetInterests: targetInterests,
         targetCareerGoals: targetCareerGoals,
         targetAcademicYears: targetAcademicYears,
+        fullDescription: fullDescription,
+        officialWebsite: officialWebsite,
+        benefits: benefits,
+        howToApply: howToApply,
+        requirements: requirements,
+        discountCode: discountCode,
+        discountPercent: discountPercent,
+        redemptionUrl: redemptionUrl,
+        // A duplicate should not inherit a publish schedule.
+        scheduledPublishAt: null,
+        scheduledUnpublishAt: null,
+        homepageEligible: homepageEligible,
+        recommendationEligible: recommendationEligible,
+        relatedResourceIds: relatedResourceIds,
       );
 
   // ── Serialization ─────────────────────────────────────────────────────────
@@ -249,6 +306,21 @@ class Resource {
       targetInterests: strList(map['targetInterests']),
       targetCareerGoals: strList(map['targetCareerGoals']),
       targetAcademicYears: intList(map['targetAcademicYears']),
+      fullDescription: clean(map['fullDescription']),
+      officialWebsite: map['officialWebsite'] as String?,
+      benefits: clean(map['benefits']),
+      howToApply: clean(map['howToApply']),
+      requirements: clean(map['requirements']),
+      discountCode: map['discountCode'] as String?,
+      discountPercent: map['discountPercent'] as num?,
+      redemptionUrl: map['redemptionUrl'] as String?,
+      scheduledPublishAt: ts(map['scheduledPublishAt']),
+      scheduledUnpublishAt: ts(map['scheduledUnpublishAt']),
+      homepageEligible: (map['homepageEligible'] as bool?) ?? false,
+      recommendationEligible:
+          (map['recommendationEligible'] as bool?) ?? true,
+      relatedResourceIds: strList(map['relatedResourceIds']),
+      urlHealth: UrlHealth.mapFromDynamic(map['urlHealth']),
       createdAt: ts(map['createdAt']),
       updatedAt: ts(map['updatedAt']),
       publishedAt: ts(map['publishedAt']),
@@ -288,6 +360,23 @@ class Resource {
         'targetInterests': targetInterests,
         'targetCareerGoals': targetCareerGoals,
         'targetAcademicYears': targetAcademicYears,
+        'fullDescription': fullDescription,
+        'officialWebsite': officialWebsite,
+        'benefits': benefits,
+        'howToApply': howToApply,
+        'requirements': requirements,
+        'discountCode': discountCode,
+        'discountPercent': discountPercent,
+        'redemptionUrl': redemptionUrl,
+        'scheduledPublishAt': scheduledPublishAt != null
+            ? Timestamp.fromDate(scheduledPublishAt!)
+            : null,
+        'scheduledUnpublishAt': scheduledUnpublishAt != null
+            ? Timestamp.fromDate(scheduledUnpublishAt!)
+            : null,
+        'homepageEligible': homepageEligible,
+        'recommendationEligible': recommendationEligible,
+        'relatedResourceIds': relatedResourceIds,
         'createdAt': createdAt != null
             ? Timestamp.fromDate(createdAt!)
             : FieldValue.serverTimestamp(),
@@ -295,4 +384,37 @@ class Resource {
         'publishedAt':
             publishedAt != null ? Timestamp.fromDate(publishedAt!) : null,
       };
+}
+
+
+/// A single URL's health record (server-computed). Immutable on the client.
+class UrlHealth {
+  /// 'ok' | 'broken' | 'unknown'.
+  final String state;
+  final int? httpStatus;
+  final DateTime? checkedAt;
+
+  const UrlHealth({required this.state, this.httpStatus, this.checkedAt});
+
+  bool get isOk => state == 'ok';
+  bool get isBroken => state == 'broken';
+
+  factory UrlHealth.fromMap(Map<String, dynamic> m) => UrlHealth(
+        state: (m['state'] as String?) ?? 'unknown',
+        httpStatus: (m['httpStatus'] as num?)?.toInt(),
+        checkedAt: (m['checkedAt'] as Timestamp?)?.toDate(),
+      );
+
+  /// Parses the raw `urlHealth` map ({field: {state,httpStatus,checkedAt}}).
+  static Map<String, UrlHealth> mapFromDynamic(dynamic v) {
+    if (v is! Map) return const {};
+    final out = <String, UrlHealth>{};
+    v.forEach((key, value) {
+      if (value is Map) {
+        out[key.toString()] =
+            UrlHealth.fromMap(value.cast<String, dynamic>());
+      }
+    });
+    return out;
+  }
 }

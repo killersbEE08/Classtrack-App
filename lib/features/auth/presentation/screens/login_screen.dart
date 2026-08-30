@@ -2,11 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:classtrack/core/theme/app_icons.dart';
 
-import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/validators.dart';
 import '../../../../shared/widgets/buttons.dart';
+import '../../../../shared/widgets/illustrations.dart';
 import '../auth_errors.dart';
 import '../providers/auth_providers.dart';
 
@@ -96,41 +95,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // Animated gradient hero badge.
-                  Center(
-                    child: Container(
-                      width: 96,
-                      height: 96,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [AppColors.primaryLight, AppColors.primary],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(28),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.primary.withValues(alpha: 0.4),
-                            blurRadius: 24,
-                            offset: const Offset(0, 12),
-                          ),
-                        ],
-                      ),
-                      child: Icon(
-                        PhosphorIcons.calendarCheck(PhosphorIconsStyle.fill),
-                        size: 46,
-                        color: Colors.white,
-                      ),
-                    )
-                        .animate()
-                        .scale(
-                            begin: const Offset(0.6, 0.6),
-                            end: const Offset(1, 1),
-                            duration: 450.ms,
-                            curve: Curves.easeOutBack)
-                        .fadeIn(duration: 350.ms),
-                  ),
-                  const SizedBox(height: 22),
+                  // Animated illustrated header.
+                  const AuthIllustration()
+                      .animate()
+                      .fadeIn(duration: 400.ms),
+                  const SizedBox(height: 8),
                   Text('Welcome back',
                           textAlign: TextAlign.center,
                           style: theme.textTheme.headlineMedium

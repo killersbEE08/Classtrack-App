@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/providers/firebase_providers.dart';
+import '../../../../core/utils/firestore_parsing.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../cms/domain/marketing.dart';
 
@@ -18,7 +19,7 @@ final homeBannersProvider = StreamProvider<List<CmsBanner>>((ref) {
       .snapshots()
       .map((snap) {
     final banners =
-        snap.docs.map((d) => CmsBanner.fromMap(d.id, d.data())).toList();
+        parseDocsSafely(snap.docs, CmsBanner.fromMap, context: 'banners');
     final home = banners
         .where((b) =>
             b.placement == Placements.home &&

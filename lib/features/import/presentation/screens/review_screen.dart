@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/date_utils.dart';
+import '../../../../services/analytics_service.dart';
 import '../../../../shared/widgets/buttons.dart';
 import '../../domain/parsed_schedule.dart';
 import '../../data/import_repository.dart';
@@ -30,10 +31,42 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   }
 
   Color _confidenceColor() => switch (_schedule.confidence) {
-        'high' => AppColors.success,
-        'medium' => AppColors.warning,
-        _ => AppColors.danger,
-      };
+    'high' => AppColors.success,
+    'medium' => AppColors.warning,
+    _ => AppColors.danger,
+  };
+
+  /// The model told us it wasn't fully sure about this parse.
+  bool get _lowConfidence => _schedule.confidence != 'high';
+
+  /// Parses "HH:MM" into minutes-since-midnight, or null when malformed.
+  int? _minutesOf(String hhmm) {
+    final m = RegExp(r'^(\d{1,2}):(\d{2})$').firstMatch(hhmm.trim());
+    if (m == null) return null;
+    final h = int.parse(m.group(1)!);
+    final min = int.parse(m.group(2)!);
+    if (h > 23 || min > 59) return null;
+    return h * 60 + min;
+  }
+
+  /// Field-level confidence: returns a short reason this session's time should
+  /// be double-checked, or null when it looks fine. Concrete problems (bad
+  /// format, end-before-start) are always flagged; when the model's overall
+  /// confidence is low/medium we also nudge the user to verify every time.
+  String? _timeIssue(ParsedSession s) {
+    final start = _minutesOf(s.start);
+    final end = _minutesOf(s.end);
+    if (start == null || end == null) return 'Check the time format';
+    if (end <= start) return 'End time is before start';
+    if (_lowConfidence) return 'AI wasn’t sure — please verify';
+    return null;
+  }
+
+  /// How many sessions across all subjects are flagged for a quick check.
+  int get _flaggedCount => _schedule.subjects
+      .expand((s) => s.sessions)
+      .where((s) => _timeIssue(s) != null)
+      .length;
 
   Future<void> _commit() async {
     final repo = ref.read(importRepositoryProvider);
@@ -42,14 +75,22 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     try {
       final result = await repo.commit(_schedule);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_summaryMessage(result))),
-      );
+      ref
+          .read(analyticsProvider)
+          .importReviewSaved(
+            subjects: result.subjects,
+            sessions: result.sessions,
+            tasks: result.tasks,
+          );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_summaryMessage(result))));
       Navigator.of(context).pop();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Could not save: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not save: $e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -73,14 +114,15 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     return 'Added ${parts.join(', ')} to ClassTrack.';
   }
 
-  Future<void> _editSession(ParsedSubject subject, ParsedSession session) async {
+  Future<void> _editSession(
+    ParsedSubject subject,
+    ParsedSession session,
+  ) async {
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      builder: (ctx) => _SessionEditor(
-        session: session,
-        onChanged: () => setState(() {}),
-      ),
+      builder: (ctx) =>
+          _SessionEditor(session: session, onChanged: () => setState(() {})),
     );
   }
 
@@ -104,7 +146,8 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   Future<void> _pickEnd(ParsedSubject subject) async {
     final picked = await showDatePicker(
       context: context,
-      initialDate: subject.endDate ??
+      initialDate:
+          subject.endDate ??
           (subject.startDate ?? DateTime.now()).add(const Duration(days: 120)),
       firstDate: subject.startDate ?? DateTime(2020),
       lastDate: DateTime(2032),
@@ -147,8 +190,12 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'AI confidence: ${_schedule.confidence.toUpperCase()}. '
-                    'Please double-check times and rooms before saving.',
+                    _flaggedCount > 0
+                        ? 'AI confidence: ${_schedule.confidence.toUpperCase()}. '
+                              '$_flaggedCount time${_flaggedCount == 1 ? '' : 's'} '
+                              'marked below need a quick check before saving.'
+                        : 'AI confidence: ${_schedule.confidence.toUpperCase()}. '
+                              'Please double-check times and rooms before saving.',
                     style: theme.textTheme.bodySmall,
                   ),
                 ),
@@ -171,8 +218,8 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
             ),
             const SizedBox(height: 10),
             ..._schedule.tasks.asMap().entries.map(
-                  (e) => _taskCard(theme, e.value, e.key),
-                ),
+              (e) => _taskCard(theme, e.value, e.key),
+            ),
           ],
         ],
       ),
@@ -217,8 +264,10 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.delete_outline_rounded,
-                  color: AppColors.danger),
+              icon: const Icon(
+                Icons.delete_outline_rounded,
+                color: AppColors.danger,
+              ),
               onPressed: () => setState(() => _schedule.tasks.removeAt(index)),
             ),
           ],
@@ -239,8 +288,7 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
               children: [
                 Checkbox(
                   value: subject.include,
-                  onChanged: (v) =>
-                      setState(() => subject.include = v ?? true),
+                  onChanged: (v) => setState(() => subject.include = v ?? true),
                 ),
                 Expanded(
                   child: TextFormField(
@@ -255,8 +303,10 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.delete_outline_rounded,
-                      color: AppColors.danger),
+                  icon: const Icon(
+                    Icons.delete_outline_rounded,
+                    color: AppColors.danger,
+                  ),
                   onPressed: () =>
                       setState(() => _schedule.subjects.removeAt(index)),
                 ),
@@ -318,25 +368,51 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
             const SizedBox(height: 10),
             ...subject.sessions.asMap().entries.map((e) {
               final session = e.value;
+              final issue = _timeIssue(session);
+              final flagged = issue != null;
+              final timeText = session.date != null
+                  ? '${DateUtilsX.prettyDate(session.date!)}  ·  ${session.start}–${session.end}'
+                  : '${session.day}  ·  ${session.start}–${session.end}';
               return ListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
-                leading: const Icon(Icons.schedule_rounded, size: 20),
-                title: Text(session.date != null
-                    ? '${DateUtilsX.prettyDate(session.date!)}  ·  ${session.start}–${session.end}'
-                    : '${session.day}  ·  ${session.start}–${session.end}'),
-                subtitle: session.room != null && session.room!.isNotEmpty
-                    ? Text('Room ${session.room}')
-                    : null,
+                leading: Icon(
+                  flagged
+                      ? Icons.error_outline_rounded
+                      : Icons.schedule_rounded,
+                  size: 20,
+                  color: flagged ? AppColors.warning : null,
+                ),
+                title: Text(
+                  timeText,
+                  style: flagged
+                      ? theme.textTheme.bodyLarge?.copyWith(
+                          color: AppColors.warning,
+                          fontWeight: FontWeight.w600,
+                        )
+                      : null,
+                ),
+                subtitle: flagged
+                    ? Text(
+                        issue,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: AppColors.warning,
+                        ),
+                      )
+                    : (session.room != null && session.room!.isNotEmpty
+                          ? Text('Room ${session.room}')
+                          : null),
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
                       icon: const Icon(Icons.edit_outlined, size: 20),
+                      tooltip: 'Edit session',
                       onPressed: () => _editSession(subject, session),
                     ),
                     IconButton(
                       icon: const Icon(Icons.close_rounded, size: 20),
+                      tooltip: 'Remove session',
                       onPressed: () =>
                           setState(() => subject.sessions.removeAt(e.key)),
                     ),
@@ -345,9 +421,11 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
               );
             }),
             TextButton.icon(
-              onPressed: () => setState(() => subject.sessions.add(
-                    ParsedSession(day: 'Monday', start: '09:00', end: '10:00'),
-                  )),
+              onPressed: () => setState(
+                () => subject.sessions.add(
+                  ParsedSession(day: 'Monday', start: '09:00', end: '10:00'),
+                ),
+              ),
               icon: const Icon(Icons.add_rounded, size: 18),
               label: const Text('Add session'),
             ),
@@ -419,16 +497,14 @@ class _SessionEditorState extends State<_SessionEditor> {
               Expanded(
                 child: TextField(
                   controller: _start,
-                  decoration: const InputDecoration(
-                      labelText: 'Start (HH:MM)'),
+                  decoration: const InputDecoration(labelText: 'Start (HH:MM)'),
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: TextField(
                   controller: _end,
-                  decoration:
-                      const InputDecoration(labelText: 'End (HH:MM)'),
+                  decoration: const InputDecoration(labelText: 'End (HH:MM)'),
                 ),
               ),
             ],

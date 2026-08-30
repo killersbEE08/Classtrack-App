@@ -52,19 +52,28 @@ class DateUtilsX {
     return tod.hour * 60 + tod.minute;
   }
 
-  /// Fixes a 12h→24h conversion slip where noon ("12:00") was mistakenly
-  /// stored as midnight ("00:00"). A class that starts in the morning but is
-  /// recorded as ending at 00:00 almost always ends at noon, so we bump the
-  /// end time to "12:00". Leaves genuinely late-evening sessions untouched.
+  /// Fixes a 12h→24h conversion slip where an afternoon (PM) end time was
+  /// mistakenly stored as its AM twin — e.g. a class ending at 1:20 PM saved
+  /// as "01:20", or noon ("12:00") saved as midnight ("00:00"). Whenever the
+  /// end lands at/before the start (an impossible same-day class), bumping it
+  /// forward 12 hours almost always restores the intended PM time, so we do
+  /// that when the result lands after the start and still inside the day.
+  /// Genuinely valid sessions (end already after start) are left untouched.
   static String normalizeEndTime24(String start, String end) {
     final s = parseTime24(start);
     final e = parseTime24(end);
     if (s == null || e == null) return end;
     final startMin = s.hour * 60 + s.minute;
     final endMin = e.hour * 60 + e.minute;
-    // End exactly at midnight after a morning/early-afternoon start → noon.
-    if (endMin == 0 && startMin > 0 && startMin < 12 * 60) {
-      return '12:00';
+    // End is not after start → likely a PM time recorded as AM. Add 12h when
+    // that makes the class valid (ends after it starts, before midnight).
+    if (endMin <= startMin) {
+      final bumped = endMin + 12 * 60;
+      if (bumped > startMin && bumped < 24 * 60) {
+        final h = (bumped ~/ 60).toString().padLeft(2, '0');
+        final m = (bumped % 60).toString().padLeft(2, '0');
+        return '$h:$m';
+      }
     }
     return end;
   }

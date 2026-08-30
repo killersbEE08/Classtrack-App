@@ -9,9 +9,12 @@ import 'cms_analytics_screen.dart';
 import 'cms_audit_logs_screen.dart';
 import 'cms_banners_screen.dart';
 import 'cms_campaigns_screen.dart';
+import 'cms_categories_screen.dart';
 import 'cms_dashboard_screen.dart';
 import 'cms_login_screen.dart';
+import 'cms_media_screen.dart';
 import 'cms_notifications_screen.dart';
+import 'cms_reports_screen.dart';
 import 'cms_resources_screen.dart';
 import 'cms_settings_screen.dart';
 import 'cms_users_screen.dart';
@@ -47,6 +50,18 @@ final cmsSections = <CmsSection>[
     build: (_, role) => CmsResourcesScreen(role: role),
   ),
   CmsSection(
+    label: 'Categories',
+    icon: Icons.sell_rounded,
+    visibleTo: (r) => r.canEditContent,
+    build: (_, __) => const CmsCategoriesScreen(),
+  ),
+  CmsSection(
+    label: 'Media',
+    icon: Icons.perm_media_rounded,
+    visibleTo: (r) => r.canEditContent || r.canManageMarketing,
+    build: (_, __) => const CmsMediaScreen(),
+  ),
+  CmsSection(
     label: 'Banners',
     icon: Icons.view_carousel_rounded,
     visibleTo: (r) => r.canManageMarketing,
@@ -69,6 +84,12 @@ final cmsSections = <CmsSection>[
     icon: Icons.insights_rounded,
     visibleTo: (r) => r.canViewAnalytics,
     build: (_, role) => CmsAnalyticsScreen(role: role),
+  ),
+  CmsSection(
+    label: 'Reports',
+    icon: Icons.flag_rounded,
+    visibleTo: (r) => r.canModerate,
+    build: (_, __) => const CmsReportsScreen(),
   ),
   CmsSection(
     label: 'Users',

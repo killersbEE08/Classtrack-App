@@ -1,13 +1,38 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 /// Poppins (geometric) for headings, Inter for body — strict hierarchy.
+///
+/// These are BUNDLED fonts (declared in pubspec.yaml), so they render on the
+/// first frame with no network fetch — no launch reflow.
 class AppTypography {
   AppTypography._();
 
   static TextTheme textTheme(Color primary, Color secondary) {
-    const heading = GoogleFonts.poppins;
-    const body = GoogleFonts.inter;
+    TextStyle heading({
+      required double fontSize,
+      required FontWeight fontWeight,
+      Color? color,
+      double? letterSpacing,
+    }) =>
+        TextStyle(
+          fontFamily: 'Poppins',
+          fontSize: fontSize,
+          fontWeight: fontWeight,
+          color: color,
+          letterSpacing: letterSpacing,
+        );
+
+    TextStyle body({
+      required double fontSize,
+      required FontWeight fontWeight,
+      Color? color,
+    }) =>
+        TextStyle(
+          fontFamily: 'Inter',
+          fontSize: fontSize,
+          fontWeight: fontWeight,
+          color: color,
+        );
 
     return TextTheme(
       displaySmall: heading(

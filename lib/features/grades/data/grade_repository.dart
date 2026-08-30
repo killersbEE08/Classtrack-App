@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/grade_item.dart';
 
 /// CRUD for users/{uid}/grades.
@@ -16,7 +17,7 @@ class GradeRepository {
   Stream<List<GradeItem>> watchGrades() {
     return _col.snapshots().map((snap) {
       final list =
-          snap.docs.map((d) => GradeItem.fromMap(d.id, d.data())).toList();
+          parseDocsSafely(snap.docs, GradeItem.fromMap, context: 'grades');
       // Newest first (by date, then created).
       list.sort((a, b) {
         final ad = a.date ?? a.createdAt;

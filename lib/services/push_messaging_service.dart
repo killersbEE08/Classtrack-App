@@ -129,7 +129,7 @@ class PushMessagingService {
     //    those). Reuse the app icon; taps flow through onDidReceive... below.
     await _local.initialize(
       settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        android: AndroidInitializationSettings('@drawable/ic_stat_notify'),
         iOS: DarwinInitializationSettings(
           requestAlertPermission: false,
           requestBadgePermission: false,
@@ -193,7 +193,7 @@ class PushMessagingService {
           channelDescription: kPushChannelDesc,
           importance: Importance.high,
           priority: Priority.high,
-          icon: '@mipmap/ic_launcher',
+          icon: 'ic_stat_notify',
         ),
         iOS: DarwinNotificationDetails(),
       ),

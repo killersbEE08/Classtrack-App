@@ -88,6 +88,50 @@ class _EditSessionScreenState extends ConsumerState<EditSessionScreen> {
     if (picked != null) setState(() => _specificDate = picked);
   }
 
+  /// Deletes this class from the timetable (edit mode only), after confirming.
+  Future<void> _delete() async {
+    final s = widget.session;
+    final repo = ref.read(sessionRepositoryProvider);
+    if (s == null || repo == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete this class?'),
+        content: const Text(
+            'This removes the class from your timetable. This cannot be '
+            'undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _saving = true);
+    try {
+      await repo.delete(s.subjectId, s.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Class deleted')));
+        Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Could not delete: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   /// Opens the subject editor so a class can be created even when no subjects
   /// exist yet (or the user wants a brand-new one). The newly created subject
   /// is auto-selected when we return, so every subject is reachable as a class.
@@ -201,7 +245,17 @@ class _EditSessionScreenState extends ConsumerState<EditSessionScreen> {
     final subjects = ref.watch(subjectsStreamProvider).valueOrNull ?? const [];
 
     return Scaffold(
-      appBar: AppBar(title: Text(_isEdit ? 'Edit class' : 'Add class')),
+      appBar: AppBar(
+        title: Text(_isEdit ? 'Edit class' : 'Add class'),
+        actions: [
+          if (_isEdit)
+            IconButton(
+              tooltip: 'Delete class',
+              icon: const Icon(Icons.delete_outline_rounded),
+              onPressed: _saving ? null : _delete,
+            ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [

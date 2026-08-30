@@ -20,6 +20,31 @@ class GoogleCalendarException implements Exception {
   String toString() => message;
 }
 
+/// The [timeMin, timeMax] RFC3339/UTC bounds for a calendar query, computed
+/// from [now] (defaults to the current instant). Extracted as a pure function
+/// so the "never look back more than a week" rule can be unit-tested without
+/// any network or OAuth.
+///
+/// [backDays] caps how far into the past the import reaches; [forwardDays] how
+/// far ahead. Both default to the app-wide Google-import window.
+class CalendarWindow {
+  final String timeMin;
+  final String timeMax;
+  const CalendarWindow(this.timeMin, this.timeMax);
+}
+
+CalendarWindow calendarWindow({
+  DateTime? now,
+  int backDays = AppConstants.googleImportBackDays,
+  int forwardDays = AppConstants.googleImportForwardDays,
+}) {
+  final base = (now ?? DateTime.now()).toUtc();
+  return CalendarWindow(
+    base.subtract(Duration(days: backDays)).toIso8601String(),
+    base.add(Duration(days: forwardDays)).toIso8601String(),
+  );
+}
+
 /// Signs the user in with the read-only Calendar scope and fetches their
 /// upcoming events from the Google Calendar API v3.
 ///
@@ -61,15 +86,26 @@ class GoogleCalendarService {
   ///
   /// Throws [GoogleCalendarCancelled] if the user backs out, or
   /// [GoogleCalendarException] if the primary calendar call fails.
+  ///
+  /// When [interactive] is false the method runs SILENTLY: it only reuses an
+  /// existing signed-in session ([signInSilently]) and already-granted scopes,
+  /// and never pops the account/consent picker — used by the daily background
+  /// auto-sync so it can never interrupt the user with a dialog.
   Future<List<Map<String, dynamic>>> fetchUpcomingEvents({
-    int windowDays = 60,
-    int backDays = 30,
+    int windowDays = AppConstants.googleImportForwardDays,
+    int backDays = AppConstants.googleImportBackDays,
+    bool interactive = true,
   }) async {
     GoogleSignInAccount? account = await _signIn.signInSilently();
-    account ??= await _signIn.signIn();
+    if (interactive) {
+      account ??= await _signIn.signIn();
+    }
     if (account == null) throw const GoogleCalendarCancelled();
 
     // Make sure the calendar scope was actually granted (incremental consent).
+    // In silent mode this returns true without UI when the scope was already
+    // granted (the auto-sync only runs for accounts that connected before), and
+    // any denial simply aborts the silent sync instead of prompting.
     final granted = await _signIn.requestScopes(
       const <String>[AppConstants.googleCalendarScope],
     );
@@ -77,9 +113,9 @@ class GoogleCalendarService {
 
     final headers = await account.authHeaders;
 
-    final now = DateTime.now().toUtc();
-    final timeMin = now.subtract(Duration(days: backDays)).toIso8601String();
-    final timeMax = now.add(Duration(days: windowDays)).toIso8601String();
+    final window = calendarWindow(backDays: backDays, forwardDays: windowDays);
+    final timeMin = window.timeMin;
+    final timeMax = window.timeMax;
 
     // De-dup by event id across calendars (the same event can appear in more
     // than one calendar). Events without an id are always kept.
@@ -196,10 +232,12 @@ class GoogleCalendarService {
   /// user who only granted calendar access (or a project where the Google
   /// Tasks API / scope isn't enabled) simply gets an empty list — event import
   /// keeps working regardless. Only incomplete, non-deleted tasks are returned.
-  Future<List<Map<String, dynamic>>> fetchTasks() async {
+  Future<List<Map<String, dynamic>>> fetchTasks({bool interactive = true}) async {
     try {
       GoogleSignInAccount? account = await _signIn.signInSilently();
-      account ??= await _signIn.signIn();
+      if (interactive) {
+        account ??= await _signIn.signIn();
+      }
       if (account == null) return const <Map<String, dynamic>>[];
 
       final granted = await _signIn
@@ -251,6 +289,87 @@ class GoogleCalendarService {
     } catch (_) {
       // Tasks import is a bonus path — never let it break the overall import.
       return const <Map<String, dynamic>>[];
+    }
+  }
+
+  /// Writes ClassTrack events INTO the user's primary Google Calendar
+  /// (two-way sync, Pro). Each event map (built by the pure builders in
+  /// `calendar_push_builder.dart`) carries a deterministic `id`, so this is an
+  /// idempotent UPSERT: it tries `events.insert`, and on a `409` "already
+  /// exists" it falls back to `events.update` on that id. Re-pushing the same
+  /// items therefore updates them in place instead of creating duplicates.
+  ///
+  /// Requests the calendar WRITE scope incrementally. When [interactive] is
+  /// false it runs silently (existing session + already-granted scope only) for
+  /// the background auto-push; a missing session/scope simply yields 0 writes
+  /// rather than a prompt. Returns the number of events successfully upserted.
+  ///
+  /// Throws [GoogleCalendarCancelled] if an interactive user backs out of the
+  /// sign-in/consent flow.
+  Future<int> pushEvents(
+    List<Map<String, dynamic>> events, {
+    bool interactive = true,
+  }) async {
+    if (events.isEmpty) return 0;
+
+    GoogleSignInAccount? account = await _signIn.signInSilently();
+    if (interactive) {
+      account ??= await _signIn.signIn();
+    }
+    if (account == null) {
+      if (interactive) throw const GoogleCalendarCancelled();
+      return 0;
+    }
+
+    final granted = await _signIn.requestScopes(
+      const <String>[AppConstants.googleCalendarWriteScope],
+    );
+    if (!granted) {
+      if (interactive) throw const GoogleCalendarCancelled();
+      return 0;
+    }
+
+    final headers = <String, String>{
+      ...await account.authHeaders,
+      'Content-Type': 'application/json',
+    };
+
+    var written = 0;
+    for (final event in events) {
+      if (await _upsertEvent(event, headers)) written++;
+    }
+    return written;
+  }
+
+  /// Inserts [event] on the primary calendar; on `409` (id already exists)
+  /// updates the existing event instead. Best-effort per event: a single
+  /// failure never aborts the rest of the batch.
+  Future<bool> _upsertEvent(
+    Map<String, dynamic> event,
+    Map<String, String> headers,
+  ) async {
+    final id = event['id'] as String?;
+    final body = jsonEncode(event);
+    try {
+      final insertUri = Uri.https(
+        'www.googleapis.com',
+        '/calendar/v3/calendars/primary/events',
+      );
+      final res = await _client.post(insertUri, headers: headers, body: body);
+      if (res.statusCode == 200 || res.statusCode == 201) return true;
+
+      // 409 = an event with this deterministic id already exists → update it.
+      if (res.statusCode == 409 && id != null) {
+        final updateUri = Uri.https(
+          'www.googleapis.com',
+          '/calendar/v3/calendars/primary/events/${Uri.encodeComponent(id)}',
+        );
+        final up = await _client.put(updateUri, headers: headers, body: body);
+        return up.statusCode == 200;
+      }
+      return false;
+    } catch (_) {
+      return false;
     }
   }
 

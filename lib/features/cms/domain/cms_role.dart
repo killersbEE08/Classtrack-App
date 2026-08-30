@@ -55,6 +55,18 @@ enum CmsRole {
   /// Change remotely-configurable settings (e.g. recommendation weights).
   bool get canEditConfig => this == superAdmin || this == admin;
 
+  /// Human-readable list of what this role is allowed to do (for the Users UI).
+  List<String> get permissionLabels => [
+        if (canEditContent) 'Create & edit content',
+        if (canModerate) 'Moderate reports',
+        if (canManageMarketing) 'Banners, campaigns & notifications',
+        if (canManageUsers) 'Manage users & roles',
+        if (canViewAuditLogs) 'View audit logs',
+        if (canEditConfig) 'Change settings',
+        if (canViewContent) 'Browse content library',
+        if (canViewAnalytics) 'View analytics',
+      ];
+
   /// Parse a claim value into a role, or `null` for a student / unknown value.
   static CmsRole? fromClaim(Object? claim) {
     if (claim is! String) return null;

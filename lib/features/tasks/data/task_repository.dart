@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/task_item.dart';
 
 /// CRUD for users/{uid}/tasks.
@@ -15,7 +16,7 @@ class TaskRepository {
   Stream<List<TaskItem>> watchTasks() {
     return _col.snapshots().map((snap) {
       final list =
-          snap.docs.map((d) => TaskItem.fromMap(d.id, d.data())).toList();
+          parseDocsSafely(snap.docs, TaskItem.fromMap, context: 'tasks');
       // Sort: incomplete first, then by due date (nulls last), then priority.
       list.sort((a, b) {
         if (a.done != b.done) return a.done ? 1 : -1;
@@ -37,7 +38,7 @@ class TaskRepository {
   /// on re-import).
   Future<List<TaskItem>> getAll() async {
     final snap = await _col.get();
-    return snap.docs.map((d) => TaskItem.fromMap(d.id, d.data())).toList();
+    return parseDocsSafely(snap.docs, TaskItem.fromMap, context: 'tasks');
   }
 
   Future<void> update(TaskItem task) =>

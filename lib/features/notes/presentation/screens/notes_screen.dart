@@ -123,7 +123,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
             Expanded(
               child: notesAsync.when(
                 loading: () => const LoadingView(),
-                error: (e, _) => ErrorView(error: e),
+                error: (e, _) => ErrorView(
+                    error: e,
+                    onRetry: () => ref.invalidate(notesStreamProvider)),
                 data: (notes) {
                   if (notes.isEmpty) {
                     return ListView(
@@ -545,6 +547,7 @@ class _NoteCard extends ConsumerWidget {
           Image.network(
             images.first.url,
             fit: BoxFit.cover,
+            cacheWidth: 500,
             loadingBuilder: (context, child, progress) => progress == null
                 ? child
                 : Container(color: AppColors.lavenderTint),

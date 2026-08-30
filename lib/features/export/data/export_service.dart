@@ -16,6 +16,21 @@ import '../../subjects/domain/subject.dart';
 class ExportService {
   ExportService._();
 
+  /// Neutralises CSV formula-injection: a spreadsheet executes a cell starting
+  /// with = + - @ (or tab/CR) as a formula, so we prefix an apostrophe.
+  static String _csvSafe(String s) {
+    if (s.isNotEmpty &&
+        (s.startsWith('=') ||
+            s.startsWith('+') ||
+            s.startsWith('-') ||
+            s.startsWith('@') ||
+            s.startsWith('\t') ||
+            s.startsWith('\r'))) {
+      return "'$s";
+    }
+    return s;
+  }
+
   /// Row of attendance summary data for one subject.
   static List<List<dynamic>> _summaryRows(
     List<Subject> subjects,
@@ -75,8 +90,13 @@ class ExportService {
     required List<Subject> subjects,
     required Map<String, AttendanceStats> statsBySubject,
   }) async {
-    final csv = const ListToCsvConverter()
-        .convert(_summaryRows(subjects, statsBySubject));
+    final rows = _summaryRows(subjects, statsBySubject);
+    // Formula-injection guard applies to CSV only (not the PDF above).
+    final safeRows = rows
+        .map((row) =>
+            row.map((c) => c is String ? _csvSafe(c) : c).toList())
+        .toList();
+    final csv = const ListToCsvConverter().convert(safeRows);
     final name =
         'ClassTrack_attendance_${DateFormat('yyyyMMdd').format(DateTime.now())}.csv';
     final file = await _writeString(name, csv);

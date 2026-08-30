@@ -24,6 +24,10 @@ service cloud.firestore {
     function isAdmin() {
       return role() in ['super_admin', 'admin'];
     }
+    // Roles allowed to review/moderate reported content.
+    function canModerate() {
+      return role() in ['super_admin', 'admin', 'moderator'];
+    }
     // A resource write must carry the core fields and stamp the editor's uid
     // (so the audit trigger can attribute the change). Server-enforced.
     function contentValid() {
@@ -35,17 +39,42 @@ service cloud.firestore {
     }
     // Incomplete resources can't be published: any student-visible status must
     // include an organization and an application/affiliate link (PRD §18).
+    // Opportunities (non-discounts) must additionally spell out the benefits
+    // and how to apply. Mirrors the client-side CMS check (evaluateResource);
+    // Admin SDK writes (Cloud Functions) bypass these rules by design.
     function publishableIfVisible() {
       let d = request.resource.data;
       return (d.status in ['draft', 'hidden'])
         || (d.organization is string && d.organization.size() > 0
             && ((d.applicationUrl is string && d.applicationUrl.size() > 0)
-                || (d.affiliateUrl is string && d.affiliateUrl.size() > 0)));
+                || (d.affiliateUrl is string && d.affiliateUrl.size() > 0))
+            && (d.type == 'discount'
+                || (d.benefits is string && d.benefits.size() > 0
+                    && d.howToApply is string && d.howToApply.size() > 0)));
+    }
+
+    // Referral / reward bookkeeping fields on the user doc are owned ONLY by
+    // the backend (Cloud Functions use the Admin SDK, which bypasses these
+    // rules). They MUST NOT be client-writable: the referral→Pro self-heal in
+    // getReferralInfo trusts `referralCount` / `referralProDaysGranted` /
+    // `referredBy`, so a client that could set those (via the raw SDK/REST,
+    // bypassing the app) could grant itself unlimited free Pro.
+    function referralFields() {
+      return ['referralCode', 'referralCount', 'referralProDaysGranted',
+              'referredBy', 'referredAt'];
     }
 
     // Everything under a user's tree is private to that user.
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+      // A client may create/update its own profile, but can never set or change
+      // the backend-owned referral/reward fields (server-managed via Admin SDK).
+      allow create: if request.auth != null && request.auth.uid == uid
+        && !request.resource.data.keys().hasAny(referralFields());
+      allow update: if request.auth != null && request.auth.uid == uid
+        && !request.resource.data.diff(resource.data)
+              .affectedKeys().hasAny(referralFields());
 
       match /{document=**} {
         allow read, write: if request.auth != null && request.auth.uid == uid;
@@ -92,6 +121,72 @@ service cloud.firestore {
       allow create: if canManageMarketing()
         && request.resource.data.updatedBy == request.auth.uid;
       allow update, delete: if false;
+    }
+
+    // User-submitted content reports (moderation). Any signed-in student may
+    // FILE a report attributed to themselves with an initial `open` status;
+    // only moderators+ may read the queue or change a report's status. Reports
+    // are never deleted (immutable history).
+    match /reports/{id} {
+      allow read: if canModerate();
+      allow create: if isSignedIn()
+        && request.resource.data.reporterUid == request.auth.uid
+        && request.resource.data.status == 'open'
+        && request.resource.data.resourceId is string
+        && request.resource.data.resourceId.size() > 0
+        && request.resource.data.resourceId.size() <= 200
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && request.resource.data.reason.size() <= 2000;
+      allow update: if canModerate();
+      allow delete: if false;
+    }
+
+    // Analytics pipeline. Students append their own engagement events (create
+    // only, never read/modify); a Cloud Function folds them into counters.
+    match /events/{id} {
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.resourceId is string
+        && request.resource.data.resourceId.size() > 0
+        && request.resource.data.resourceId.size() <= 200
+        && request.resource.data.event is string
+        && request.resource.data.event.size() <= 100;
+      allow read, update, delete: if false;
+    }
+    // Aggregated counters — written ONLY by the backend (Admin SDK), readable
+    // by any CMS role (all roles may view analytics).
+    match /resourceMetrics/{id} {
+      allow read: if role() != 'none';
+      allow write: if false;
+    }
+    match /metricsDaily/{id} {
+      allow read: if role() != 'none';
+      allow write: if false;
+    }
+    // Audience aggregate for notification recipient estimates. Backend-written;
+    // readable by marketing roles (who compose notifications).
+    match /audienceCounts/{id} {
+      allow read: if canManageMarketing();
+      allow write: if false;
+    }
+
+    // Managed content taxonomy. Readable by any signed-in user (students see
+    // category labels); only content editors may manage it.
+    match /categories/{id} {
+      allow read: if isSignedIn();
+      allow create, update: if canEditContent()
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if canEditContent();
+    }
+
+    // Media library index (Cloud Storage assets). Readable by any signed-in
+    // user (URLs are used in content); managed by content/marketing roles.
+    match /mediaAssets/{id} {
+      allow read: if isSignedIn();
+      allow create, update: if (canEditContent() || canManageMarketing())
+        && request.resource.data.updatedBy == request.auth.uid;
+      allow delete: if canEditContent() || canManageMarketing();
     }
 
     // Remotely-configurable app config (e.g. recommendation weights). Readable

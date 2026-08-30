@@ -14,12 +14,17 @@ import '../../../auth/presentation/screens/edit_profile_screen.dart';
 import '../../../exams/presentation/providers/exam_providers.dart';
 import '../../../insights/presentation/screens/daily_agenda_screen.dart';
 import '../../../insights/presentation/screens/insights_screen.dart';
+import '../../../planner/presentation/screens/weekly_planner_screen.dart';
 import '../../../moments/presentation/screens/moments_screen.dart';
 import '../../../referral/presentation/screens/referral_screen.dart';
 import '../../../schedule/presentation/providers/schedule_providers.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../../tasks/presentation/providers/task_providers.dart';
 import '../../../../services/notification_service.dart';
+import '../../../../services/calendar_auto_sync.dart';
+import '../../../../services/google_calendar_service.dart';
+import '../../../calendar/presentation/providers/calendar_push_providers.dart';
+import '../../../import/presentation/screens/import_entry.dart';
 import '../../../subscription/domain/pro_constants.dart';
 import '../../../subscription/presentation/providers/subscription_providers.dart';
 import '../../../subscription/presentation/screens/paywall_screen.dart';
@@ -71,6 +76,22 @@ class SettingsScreen extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: 16),
+          _sectionLabel(theme, 'Study planner'),
+          _card(
+            theme,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.auto_awesome_rounded,
+                  color: AppColors.primary),
+              title: const Text('AI weekly planner'),
+              subtitle: const Text(
+                  'Turn your exams, deadlines & free time into a study plan'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const WeeklyPlannerScreen())),
+            ),
+          ),
+          const SizedBox(height: 16),
           _sectionLabel(theme, 'Daily agenda'),
           _card(
             theme,
@@ -90,37 +111,6 @@ class SettingsScreen extends ConsumerWidget {
                   await showPaywall(context);
                 }
               },
-            ),
-          ),
-          const SizedBox(height: 16),
-          _sectionLabel(theme, 'Grow ClassTrack'),
-          _card(
-            theme,
-            child: Column(
-              children: [
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.card_giftcard_rounded,
-                      color: AppColors.primary),
-                  title: const Text('Invite friends & earn Pro'),
-                  subtitle: const Text(
-                      'You both get ${AppConstants.referralRewardDays} days of Pro free'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const ReferralScreen())),
-                ),
-                const Divider(height: 1),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.auto_awesome_motion_rounded,
-                      color: AppColors.coral),
-                  title: const Text('Shareable moments'),
-                  subtitle: const Text('Turn your wins into share-worthy cards'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const MomentsScreen())),
-                ),
-              ],
             ),
           ),
           const SizedBox(height: 16),
@@ -258,6 +248,40 @@ class SettingsScreen extends ConsumerWidget {
           const SizedBox(height: 12),
           _notificationPrefsCard(context, ref, theme),
           const SizedBox(height: 16),
+          _sectionLabel(theme, 'Google Calendar'),
+          _googleAutoSyncCard(context, ref, theme),
+          const SizedBox(height: 16),
+          _sectionLabel(theme, 'Grow ClassTrack'),
+          _card(
+            theme,
+            child: Column(
+              children: [
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.card_giftcard_rounded,
+                      color: AppColors.primary),
+                  title: const Text('Invite friends & earn Pro'),
+                  subtitle: const Text(
+                      'You both get ${AppConstants.referralRewardDays} days of Pro free'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const ReferralScreen())),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.auto_awesome_motion_rounded,
+                      color: AppColors.coral),
+                  title: const Text('Shareable moments'),
+                  subtitle: const Text('Turn your wins into share-worthy cards'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => const MomentsScreen())),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
           _sectionLabel(theme, 'Support & feedback'),
           _supportCard(context, ref, theme),
           const SizedBox(height: 16),
@@ -326,7 +350,7 @@ class SettingsScreen extends ConsumerWidget {
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(PhosphorIcons.info(), color: AppColors.primary),
                   title: const Text('Version'),
-                  trailing: const Text('1.0.14'),
+                  trailing: const Text(AppConstants.appVersion),
                 ),
               ],
             ),
@@ -337,18 +361,6 @@ class SettingsScreen extends ConsumerWidget {
             theme,
             child: Column(
               children: [
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.person_outline_rounded,
-                      color: AppColors.primary),
-                  title: const Text('Edit profile'),
-                  subtitle: const Text(
-                      'Name, education, interests & career goal'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const EditProfileScreen())),
-                ),
-                const Divider(height: 1),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(PhosphorIcons.signOut()),
@@ -540,6 +552,16 @@ class SettingsScreen extends ConsumerWidget {
               ],
             ),
           ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.22),
+              shape: BoxShape.circle,
+            ),
+            child:
+                const Icon(Icons.edit_rounded, color: Colors.white, size: 18),
+          ),
         ],
       ),
     );
@@ -698,6 +720,133 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  // ── Google Calendar daily auto-sync ─────────────────────────────────────
+  Widget _googleAutoSyncCard(
+      BuildContext context, WidgetRef ref, ThemeData theme) {
+    final enabled = ref.watch(googleAutoSyncEnabledProvider);
+    final autoPush = ref.watch(googleAutoPushEnabledProvider);
+    final connected = ref.watch(googleAutoSyncConnectedProvider);
+    final isPro = ref.watch(isProProvider);
+    return _card(
+      theme,
+      child: Column(
+        children: [
+          // Daily auto-import (Pro).
+          _proSwitchTile(
+            context,
+            theme,
+            title: 'Daily auto-sync',
+            subtitle: connected
+                ? 'Auto-imports your Google Calendar events & Tasks every day '
+                    'at 7 PM (last 7 days only, no duplicates)'
+                : 'Connect Google below, then it imports automatically every '
+                    'day at 7 PM (last 7 days only, no duplicates)',
+            value: enabled && isPro,
+            isPro: isPro,
+            onChanged: (v) async {
+              if (!isPro) {
+                await showPaywall(context);
+                return;
+              }
+              await ref.read(googleAutoSyncEnabledProvider.notifier).set(v);
+            },
+          ),
+          const Divider(height: 1),
+          // Two-way write-back push (Pro): auto-push toggle.
+          _proSwitchTile(
+            context,
+            theme,
+            title: 'Push to Google Calendar',
+            subtitle:
+                'Also add your classes, exams & deadlines into Google Calendar '
+                'on each daily sync',
+            value: autoPush && isPro,
+            isPro: isPro,
+            onChanged: (v) async {
+              if (!isPro) {
+                await showPaywall(context);
+                return;
+              }
+              await ref.read(googleAutoPushEnabledProvider.notifier).set(v);
+            },
+          ),
+          const Divider(height: 1),
+          // Manual "push now" (Pro).
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.upload_rounded, color: AppColors.primary),
+            title: Row(
+              children: [
+                const Flexible(child: Text('Push to Calendar now')),
+                const SizedBox(width: 8),
+                if (!isPro) _proChip(theme),
+              ],
+            ),
+            subtitle: Text(
+              'Send your classes, exams & task deadlines to Google Calendar',
+              style: theme.textTheme.bodySmall,
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () async {
+              if (!ref.read(isProProvider)) {
+                await showPaywall(context);
+                return;
+              }
+              await _runCalendarPush(context, ref);
+            },
+          ),
+          const Divider(height: 1),
+          // Connect / import (free).
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(
+              connected
+                  ? Icons.check_circle_rounded
+                  : Icons.event_available_rounded,
+              color: connected ? Colors.green : AppColors.primary,
+            ),
+            title: Text(connected ? 'Import now' : 'Connect Google Calendar'),
+            subtitle: Text(
+              connected
+                  ? 'Import the latest events & tasks right away'
+                  : 'Grant read-only access — free one-tap import',
+              style: theme.textTheme.bodySmall,
+            ),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => runGoogleCalendarImport(context, ref),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Runs the two-way write-back with a blocking spinner and a result snackbar.
+  Future<void> _runCalendarPush(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    try {
+      final n = await ref.read(calendarPushControllerProvider).push();
+      navigator.pop();
+      messenger.showSnackBar(SnackBar(
+        content: Text(n == 0
+            ? 'Nothing to push yet — add some classes, exams or tasks first.'
+            : 'Pushed $n item${n == 1 ? '' : 's'} to your Google Calendar.'),
+      ));
+    } on GoogleCalendarCancelled {
+      navigator.pop();
+    } catch (e) {
+      navigator.pop();
+      messenger.showSnackBar(
+        SnackBar(content: Text('Couldn\'t push to Google Calendar: $e')),
+      );
+    }
   }
 
   // ── Notification preferences ────────────────────────────────────────────

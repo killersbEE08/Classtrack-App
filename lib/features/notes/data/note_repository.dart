@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/note.dart';
 
 /// CRUD for users/{uid}/notes.
@@ -15,7 +16,7 @@ class NoteRepository {
 
   Stream<List<Note>> watchNotes() {
     return _col.snapshots().map((snap) {
-      final list = snap.docs.map((d) => Note.fromMap(d.id, d.data())).toList();
+      final list = parseDocsSafely(snap.docs, Note.fromMap, context: 'notes');
       // Pinned first, then most recently updated.
       list.sort((a, b) {
         if (a.pinned != b.pinned) return a.pinned ? -1 : 1;

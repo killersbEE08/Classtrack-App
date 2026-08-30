@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/date_utils.dart';
+import '../../../../shared/widgets/placement_banner.dart';
+import '../../../../shared/widgets/placement_campaign.dart';
+import '../../../../shared/widgets/illustrations.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../auth/presentation/screens/edit_profile_screen.dart';
+import '../../../cms/domain/marketing.dart';
 import '../../data/resource_repository.dart';
 import '../../domain/resource.dart';
 import '../../domain/resource_type.dart';
@@ -15,8 +20,9 @@ import 'resource_detail_screen.dart';
 import 'saved_opportunities_screen.dart';
 
 /// The Opportunities destination: a live feed of scholarships, internships,
-/// competitions, etc. (discounts have their own surface). Search + category
-/// chips + a filter sheet sit on top of the unified `resources` collection.
+/// competitions, etc. (perks have their own surface). A featured carousel sits
+/// atop a personalized "Recommended for you" list, with category chips and a
+/// filter sheet over the unified `resources` collection.
 class OpportunitiesScreen extends ConsumerStatefulWidget {
   const OpportunitiesScreen({super.key});
 
@@ -28,10 +34,18 @@ class OpportunitiesScreen extends ConsumerStatefulWidget {
 class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
   final _searchCtrl = TextEditingController();
   String _query = '';
+  bool _searching = false;
   ResourceType? _type; // null = All
   bool _remoteOnly = false;
   bool _paidOnly = false;
   bool _verifiedOnly = false;
+
+  bool get _hasFilters =>
+      _type != null ||
+      _remoteOnly ||
+      _paidOnly ||
+      _verifiedOnly ||
+      _query.isNotEmpty;
 
   @override
   void dispose() {
@@ -39,8 +53,115 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
     super.dispose();
   }
 
-  void _open(Resource r) => Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ResourceDetailScreen(resource: r)));
+  void _open(Resource r) => Navigator.of(
+    context,
+  ).push(MaterialPageRoute(builder: (_) => ResourceDetailScreen(resource: r)));
+
+  void _openFeatured(List<Resource> items) => Navigator.of(context).push(
+    MaterialPageRoute(builder: (_) => _AllFeaturedOppsScreen(items: items)),
+  );
+
+  void _clearAll() {
+    _searchCtrl.clear();
+    setState(() {
+      _type = null;
+      _remoteOnly = false;
+      _paidOnly = false;
+      _verifiedOnly = false;
+      _query = '';
+    });
+  }
+
+  Future<void> _openFilterSheet() async {
+    await showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).cardColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) {
+          final theme = Theme.of(ctx);
+          Widget toggle(
+            String label,
+            IconData icon,
+            bool value,
+            ValueChanged<bool> onChanged,
+          ) => SwitchListTile(
+            value: value,
+            activeThumbColor: AppColors.primary,
+            onChanged: (v) {
+              setSheet(() {});
+              onChanged(v);
+            },
+            secondary: Icon(icon, color: AppColors.primary),
+            title: Text(label, style: theme.textTheme.titleMedium),
+          );
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+                    child: Text('Filters', style: theme.textTheme.titleLarge),
+                  ),
+                  toggle(
+                    'Remote only',
+                    Icons.public_rounded,
+                    _remoteOnly,
+                    (v) => setState(() => _remoteOnly = v),
+                  ),
+                  toggle(
+                    'Paid / stipend',
+                    Icons.payments_rounded,
+                    _paidOnly,
+                    (v) => setState(() => _paidOnly = v),
+                  ),
+                  toggle(
+                    'Verified only',
+                    Icons.verified_rounded,
+                    _verifiedOnly,
+                    (v) => setState(() => _verifiedOnly = v),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () {
+                              _clearAll();
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text('Reset'),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                            ),
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text('Show results'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -50,75 +171,110 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
     final hidden = ref.watch(hiddenResourceIdsProvider).valueOrNull ?? const {};
 
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('Opportunities'),
+        actions: [
+          IconButton(
+            icon: Icon(
+              _searching ? Icons.search_off_rounded : Icons.search_rounded,
+            ),
+            tooltip: 'Search',
+            onPressed: () => setState(() {
+              _searching = !_searching;
+              if (!_searching) {
+                _searchCtrl.clear();
+                _query = '';
+              }
+            }),
+          ),
+          IconButton(
+            icon: const Icon(Icons.card_giftcard_outlined),
+            tooltip: 'Perks',
+            onPressed: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const DiscountsScreen())),
+          ),
+          IconButton(
+            icon: const Icon(Icons.bookmark_border_rounded),
+            tooltip: 'Saved',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const SavedOpportunitiesScreen(),
+              ),
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: AppColors.primary,
+        onPressed: _openFilterSheet,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            const Icon(Icons.tune_rounded, color: Colors.white),
+            if (_remoteOnly || _paidOnly || _verifiedOnly)
+              Positioned(
+                right: -2,
+                top: -2,
+                child: Container(
+                  width: 10,
+                  height: 10,
+                  decoration: const BoxDecoration(
+                    color: AppColors.accent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
       body: SafeArea(
         bottom: false,
         child: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 12, 0),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text('Opportunities',
-                        style: theme.textTheme.displaySmall),
+            if (_searching)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: TextField(
+                  controller: _searchCtrl,
+                  autofocus: true,
+                  onChanged: (v) => setState(() => _query = v),
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: 'Search opportunities',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        setState(() {
+                          _query = '';
+                          _searching = false;
+                        });
+                      },
+                    ),
+                    filled: true,
+                    fillColor: theme.cardColor,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 4,
+                    ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.local_offer_outlined),
-                    tooltip: 'Student discounts',
-                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => const DiscountsScreen())),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.bookmark_border_rounded),
-                    tooltip: 'Saved',
-                    onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => const SavedOpportunitiesScreen())),
-                  ),
-                  _FilterButton(
-                    active: _remoteOnly || _paidOnly || _verifiedOnly,
-                    onTap: _openFilters,
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
-              child: TextField(
-                controller: _searchCtrl,
-                onChanged: (v) => setState(() => _query = v),
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  hintText: 'Search opportunities',
-                  prefixIcon: const Icon(Icons.search_rounded),
-                  suffixIcon: _query.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.close_rounded),
-                          onPressed: () {
-                            _searchCtrl.clear();
-                            setState(() => _query = '');
-                          },
-                        ),
-                  filled: true,
-                  fillColor: theme.cardColor,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(16),
-                    borderSide: BorderSide.none,
-                  ),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                 ),
               ),
-            ),
             Expanded(
               child: async.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: CircularProgressIndicator()),
                 error: (_, __) => _messageState(
                   theme,
                   icon: Icons.cloud_off_rounded,
                   title: "Couldn't load opportunities",
                   body: 'Check your connection and try again.',
+                  onRetry: () => ref.invalidate(visibleResourcesProvider),
                 ),
                 data: (all) {
                   final opportunities = all
@@ -133,9 +289,8 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
                   }
 
                   final types = <ResourceType>{
-                    for (final r in opportunities) r.type
-                  }.toList()
-                    ..sort((a, b) => a.label.compareTo(b.label));
+                    for (final r in opportunities) r.type,
+                  }.toList()..sort((a, b) => a.label.compareTo(b.label));
 
                   var list = _type == null
                       ? opportunities
@@ -150,38 +305,125 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
                   if (_verifiedOnly) {
                     list = list.where((r) => r.verified).toList();
                   }
-                  // Personalized ordering (Phase 6).
-                  list = ref.read(recommenderProvider).rank(
-                        list,
-                        ref.watch(userProfileProvider).valueOrNull,
-                      );
+                  list = ref
+                      .read(recommenderProvider)
+                      .rank(list, ref.watch(userProfileProvider).valueOrNull);
 
-                  return Column(
-                    children: [
-                      _CategoryChips(
-                        types: types,
-                        selected: _type,
-                        onSelect: (t) => setState(() => _type = t),
-                      ),
-                      Expanded(
-                        child: list.isEmpty
-                            ? _messageState(
-                                theme,
-                                icon: Icons.filter_alt_off_rounded,
-                                title: 'No matches',
-                                body: 'Try clearing search or filters.',
-                              )
-                            : ListView(
-                                padding:
-                                    const EdgeInsets.fromLTRB(20, 8, 20, 120),
-                                children: [
-                                  for (final r in list)
-                                    ResourceCard(
-                                        resource: r, onTap: () => _open(r)),
+                  // Featured carousel: ONLY items actually flagged featured in
+                  // the CMS — so it's hidden (no empty gap) until you feature
+                  // something.
+                  final featured = list
+                      .where((r) => r.featured)
+                      .take(8)
+                      .toList();
+
+                  return _CategoryChips(
+                    types: types,
+                    selected: _type,
+                    onSelect: (t) => setState(() => _type = t),
+                    child: list.isEmpty
+                        ? _messageState(
+                            theme,
+                            icon: Icons.filter_alt_off_rounded,
+                            title: 'No matches',
+                            body: 'Try clearing search or filters.',
+                            onClear: _hasFilters ? _clearAll : null,
+                          )
+                        : Builder(
+                            builder: (context) {
+                              // The featured carousel needs a bounded height, but
+                              // a hard 190px clipped 2-line titles (the "BOTTOM
+                              // OVERFLOWED BY 10px" card) — and worse as the user
+                              // scales text up (we allow up to 1.3x). Only the
+                              // text inside the card scales, so add headroom
+                              // proportional to the text scale.
+                              final ts = MediaQuery.textScalerOf(
+                                context,
+                              ).scale(1.0).clamp(1.0, 1.3);
+                              final carouselHeight = 204.0 + (ts - 1.0) * 90.0;
+                              final header = <Widget>[
+                                const PlacementBanner(
+                                  placement: Placements.opportunities,
+                                ),
+                                const PlacementCampaign(
+                                  placement: Placements.opportunities,
+                                ),
+                                if (featured.isNotEmpty && !_hasFilters) ...[
+                                  SectionHeader(
+                                    title: '🔥 Featured',
+                                    actionLabel: featured.length > 1
+                                        ? 'See all'
+                                        : null,
+                                    onAction: featured.length > 1
+                                        ? () => _openFeatured(featured)
+                                        : null,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    height: carouselHeight,
+                                    child: ListView.separated(
+                                      scrollDirection: Axis.horizontal,
+                                      physics: const BouncingScrollPhysics(),
+                                      itemCount: featured.length,
+                                      separatorBuilder: (_, __) =>
+                                          const SizedBox(width: 14),
+                                      itemBuilder: (_, i) => _FeaturedOppCard(
+                                        resource: featured[i],
+                                        accentIndex: i,
+                                        onTap: () => _open(featured[i]),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 22),
                                 ],
-                              ),
-                      ),
-                    ],
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    const Icon(
+                                      Icons.auto_awesome_rounded,
+                                      size: 20,
+                                      color: AppColors.primary,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'Recommended for you',
+                                      style: theme.textTheme.titleLarge
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Personalized picks based on your profile and activity',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.hintColor,
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                              ];
+                              // Lazy list: only visible cards (and their image
+                              // streams) are built, keeping scroll smooth.
+                              return ListView.builder(
+                                padding: const EdgeInsets.fromLTRB(
+                                  20,
+                                  4,
+                                  20,
+                                  120,
+                                ),
+                                itemCount: header.length + list.length,
+                                itemBuilder: (_, i) {
+                                  if (i < header.length) return header[i];
+                                  final r = list[i - header.length];
+                                  return _OpportunityCard(
+                                    resource: r,
+                                    onTap: () => _open(r),
+                                  );
+                                },
+                              );
+                            },
+                          ),
                   );
                 },
               ),
@@ -192,24 +434,51 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
     );
   }
 
-  Widget _messageState(ThemeData theme,
-      {required IconData icon,
-      required String title,
-      required String body}) {
+  Widget _messageState(
+    ThemeData theme, {
+    required IconData icon,
+    required String title,
+    required String body,
+    VoidCallback? onClear,
+    VoidCallback? onRetry,
+  }) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 48, color: theme.hintColor),
-            const SizedBox(height: 12),
+            EmptyIllustration(icon: icon, color: AppColors.primary),
+            const SizedBox(height: 8),
             Text(title, style: theme.textTheme.titleMedium),
             const SizedBox(height: 6),
-            Text(body,
-                textAlign: TextAlign.center,
-                style:
-                    theme.textTheme.bodySmall?.copyWith(color: theme.hintColor)),
+            Text(
+              body,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.hintColor,
+              ),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Refresh'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                ),
+              ),
+            ],
+            if (onClear != null) ...[
+              const SizedBox(height: 12),
+              TextButton.icon(
+                onPressed: onClear,
+                icon: const Icon(Icons.close_rounded, size: 16),
+                label: const Text('Clear filters'),
+                style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+              ),
+            ],
           ],
         ),
       ),
@@ -218,7 +487,8 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
 
   Widget _emptyContentState(ThemeData theme) {
     final hasProfile =
-        ref.watch(userProfileProvider).valueOrNull?.hasAnyProfileDetails ?? false;
+        ref.watch(userProfileProvider).valueOrNull?.hasAnyProfileDetails ??
+        false;
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 24, 20, 120),
       children: [
@@ -227,36 +497,37 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
           decoration: softCard(context),
           child: Column(
             children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(Icons.rocket_launch_rounded,
-                    color: AppColors.primary),
+              const EmptyIllustration(
+                icon: Icons.rocket_launch_rounded,
+                color: AppColors.primary,
               ),
-              const SizedBox(height: 14),
-              Text('New opportunities are on the way',
-                  style: theme.textTheme.titleMedium,
-                  textAlign: TextAlign.center),
+              const SizedBox(height: 10),
+              Text(
+                'New opportunities are on the way',
+                style: theme.textTheme.titleMedium,
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 6),
               Text(
                 hasProfile
                     ? "We're curating scholarships, internships and deals matched to you. Check back soon."
                     : 'Add your country, degree & interests so we can match the best opportunities to you.',
-                style:
-                    theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.hintColor,
+                ),
                 textAlign: TextAlign.center,
               ),
               if (!hasProfile) ...[
                 const SizedBox(height: 16),
                 FilledButton(
-                  style:
-                      FilledButton.styleFrom(backgroundColor: AppColors.primary),
-                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => const EditProfileScreen())),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                  ),
+                  onPressed: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const EditProfileScreen(),
+                    ),
+                  ),
                   child: const Text('Complete your profile'),
                 ),
               ],
@@ -266,141 +537,567 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
       ],
     );
   }
-
-  Future<void> _openFilters() async {
-    await showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setSheet) {
-            final theme = Theme.of(ctx);
-            void toggle(void Function() f) {
-              setSheet(f);
-              setState(f);
-            }
-
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Filters', style: theme.textTheme.titleLarge),
-                    const SizedBox(height: 8),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Remote only'),
-                      value: _remoteOnly,
-                      onChanged: (v) => toggle(() => _remoteOnly = v),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Paid only'),
-                      value: _paidOnly,
-                      onChanged: (v) => toggle(() => _paidOnly = v),
-                    ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Verified only'),
-                      value: _verifiedOnly,
-                      onChanged: (v) => toggle(() => _verifiedOnly = v),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        TextButton(
-                          onPressed: () => toggle(() {
-                            _remoteOnly = false;
-                            _paidOnly = false;
-                            _verifiedOnly = false;
-                          }),
-                          child: const Text('Clear all'),
-                        ),
-                        const Spacer(),
-                        FilledButton(
-                          style: FilledButton.styleFrom(
-                              backgroundColor: AppColors.primary),
-                          onPressed: () => Navigator.pop(ctx),
-                          child: const Text('Done'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
 }
 
-class _FilterButton extends StatelessWidget {
-  final bool active;
-  final VoidCallback onTap;
-  const _FilterButton({required this.active, required this.onTap});
+/// Wraps content with a sticky-ish horizontal category chip bar on top.
+class _CategoryChips extends StatelessWidget {
+  final List<ResourceType> types;
+  final ResourceType? selected;
+  final ValueChanged<ResourceType?> onSelect;
+  final Widget child;
+  const _CategoryChips({
+    required this.types,
+    required this.selected,
+    required this.onSelect,
+    required this.child,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
+    return Column(
       children: [
-        IconButton(
-          icon: const Icon(Icons.tune_rounded),
-          tooltip: 'Filters',
-          onPressed: onTap,
-        ),
-        if (active)
-          const Positioned(
-            right: 8,
-            top: 8,
-            child: CircleAvatar(radius: 4, backgroundColor: AppColors.primary),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 40,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            physics: const BouncingScrollPhysics(),
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: _CatChip(
+                  label: 'All',
+                  icon: Icons.grid_view_rounded,
+                  accent: AppColors.primary,
+                  selected: selected == null,
+                  onTap: () => onSelect(null),
+                ),
+              ),
+              for (final t in types)
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _CatChip(
+                    label: t.label,
+                    icon: t.icon,
+                    accent: t.color,
+                    selected: selected == t,
+                    onTap: () => onSelect(selected == t ? null : t),
+                  ),
+                ),
+            ],
           ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(child: child),
       ],
     );
   }
 }
 
-class _CategoryChips extends StatelessWidget {
-  final List<ResourceType> types;
-  final ResourceType? selected;
-  final ValueChanged<ResourceType?> onSelect;
-  const _CategoryChips({
-    required this.types,
+/// A compact, soft category chip: filled tint + coloured icon when idle, solid
+/// accent when selected. Deliberately lighter than [FilterPill] (smaller text,
+/// no heavy border) so a bar of long labels stays clean and scannable.
+class _CatChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color accent;
+  final bool selected;
+  final VoidCallback onTap;
+  const _CatChip({
+    required this.label,
+    required this.icon,
+    required this.accent,
     required this.selected,
-    required this.onSelect,
+    required this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 44,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: ChoiceChip(
-              label: const Text('All'),
-              selected: selected == null,
-              onSelected: (_) => onSelect(null),
-            ),
+    final theme = Theme.of(context);
+    final bg = selected
+        ? accent
+        : (theme.brightness == Brightness.dark
+              ? AppColors.darkSurfaceAlt
+              : accent.withValues(alpha: 0.10));
+    final fg = selected ? Colors.white : accent;
+    return Material(
+      color: bg,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: fg),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: selected
+                      ? Colors.white
+                      : theme.textTheme.bodyMedium?.color,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
           ),
-          for (final t in types)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                label: Text(t.label),
-                avatar: Icon(t.icon, size: 16, color: t.color),
-                selected: selected == t,
-                onSelected: (_) => onSelect(t),
+        ),
+      ),
+    );
+  }
+}
+
+/// A compact, tinted featured-opportunity card for the horizontal row — styled
+/// to match the Perks "Featured" cards.
+class _FeaturedOppCard extends ConsumerWidget {
+  final Resource resource;
+  final int accentIndex;
+  final VoidCallback onTap;
+  const _FeaturedOppCard({
+    required this.resource,
+    required this.accentIndex,
+    required this.onTap,
+  });
+
+  static const _palettes = [
+    (Color(0xFFE7E1FB), AppColors.primary),
+    (Color(0xFFE1F3E9), AppColors.success),
+    (Color(0xFFFBEAD6), AppColors.accent),
+  ];
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final (paletteBg, accent) = _palettes[accentIndex % _palettes.length];
+    // The palette backgrounds are light pastels; in dark mode they'd wash out
+    // the near-white title text. Use a subtle accent-tinted dark surface there
+    // so the card keeps its colour while the text stays legible.
+    final bg = theme.brightness == Brightness.dark
+        ? Color.alphaBlend(
+            accent.withValues(alpha: 0.16),
+            AppColors.darkSurface,
+          )
+        : paletteBg;
+    final match = ref.watch(resourceScoreProvider(resource));
+    final showMatch = match.personalized && match.score >= 40;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 178,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: accent.withValues(alpha: 0.22), width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: accent.withValues(alpha: 0.12),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.workspace_premium_rounded, size: 13, color: accent),
+                const SizedBox(width: 3),
+                Text(
+                  'Featured',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: accent,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ResourceThumb(resource: resource, size: 40, preferLogo: true),
+            const SizedBox(height: 10),
+            Text(
+              resource.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+                fontSize: 14.5,
               ),
             ),
-        ],
+            const SizedBox(height: 2),
+            Text(
+              resource.type.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.hintColor,
+              ),
+            ),
+            const Spacer(),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    showMatch
+                        ? '${match.score}% match'
+                        : (resource.deadline != null
+                              ? 'By ${DateUtilsX.prettyDate(resource.deadline!)}'
+                              : resource.organization),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: showMatch ? AppColors.success : theme.hintColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Container(
+                  width: 30,
+                  height: 30,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 16,
+                    color: accent,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+/// Full list of featured opportunities (opened from "See all").
+class _AllFeaturedOppsScreen extends StatelessWidget {
+  final List<Resource> items;
+  const _AllFeaturedOppsScreen({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Featured')),
+      body: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+        itemCount: items.length,
+        itemBuilder: (_, i) {
+          final r = items[i];
+          return _OpportunityCard(
+            resource: r,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => ResourceDetailScreen(resource: r),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// A rich recommended-opportunity card: type + match tags, title, org, a meta
+/// row (deadline / stipend / location) and a match score, with an inline save.
+class _OpportunityCard extends ConsumerWidget {
+  final Resource resource;
+  final VoidCallback onTap;
+  const _OpportunityCard({required this.resource, required this.onTap});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final saved = ref.watch(savedResourceIdsProvider).valueOrNull ?? const {};
+    final isSaved = saved.contains(resource.id);
+    final match = ref.watch(resourceScoreProvider(resource));
+    final highMatch = match.personalized && match.score >= 85;
+
+    final published = resource.publishedAt ?? resource.createdAt;
+    final isNew =
+        published != null && DateTime.now().difference(published).inDays <= 14;
+    final showMatch = match.personalized && match.score >= 40;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: softCard(context, radius: 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ResourceThumb(resource: resource, size: 46, preferLogo: true),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          ResourcePill(
+                            label: resource.type.label,
+                            color: resource.type.color,
+                            icon: resource.type.icon,
+                          ),
+                          if (highMatch)
+                            const ResourcePill(
+                              label: 'High match',
+                              color: AppColors.accent,
+                              icon: Icons.star_rounded,
+                            ),
+                          if (resource.verified)
+                            const Icon(
+                              Icons.verified_rounded,
+                              size: 15,
+                              color: AppColors.info,
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        resource.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        resource.organization,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.hintColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                _SaveIcon(resource: resource, isSaved: isSaved, saved: saved),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _MetaStrip(
+              items: [
+                if (resource.deadline != null)
+                  (
+                    Icons.event_rounded,
+                    'Apply by',
+                    DateUtilsX.prettyDate(resource.deadline!),
+                  ),
+                if (resource.paid == true)
+                  (Icons.payments_rounded, 'Stipend', 'Paid'),
+              ],
+            ),
+            if (showMatch || resource.sponsored || highMatch || isNew) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  if (showMatch)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.success.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.auto_awesome_rounded,
+                            size: 12,
+                            color: AppColors.success,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${match.score}% match',
+                            style: theme.textTheme.labelMedium?.copyWith(
+                              color: AppColors.success,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const Spacer(),
+                  if (resource.sponsored)
+                    Text(
+                      'Sponsored',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    )
+                  else if (highMatch)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Popular',
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: AppColors.success,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        const Icon(
+                          Icons.trending_up_rounded,
+                          size: 14,
+                          color: AppColors.success,
+                        ),
+                      ],
+                    )
+                  else if (isNew)
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Newly added',
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: AppColors.info,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.fiber_manual_record,
+                          size: 8,
+                          color: AppColors.info,
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A divided row of label-over-value meta groups (Apply by / Stipend /
+/// Location), rendered inside a soft tinted strip.
+class _MetaStrip extends StatelessWidget {
+  final List<(IconData, String, String)> items;
+  const _MetaStrip({required this.items});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (items.isEmpty) return const SizedBox.shrink();
+    final children = <Widget>[];
+    for (var i = 0; i < items.length; i++) {
+      final (icon, label, value) = items[i];
+      children.add(
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, size: 12, color: theme.hintColor),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.hintColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 3),
+              Text(
+                value,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.labelMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (i != items.length - 1) {
+        children.add(
+          Container(
+            width: 1,
+            height: 30,
+            margin: const EdgeInsets.symmetric(horizontal: 10),
+            color: theme.dividerColor,
+          ),
+        );
+      }
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: theme.brightness == Brightness.dark
+            ? AppColors.darkSurfaceAlt
+            : AppColors.lavenderSoft,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: children,
+      ),
+    );
+  }
+}
+
+class _SaveIcon extends ConsumerWidget {
+  final Resource resource;
+  final bool isSaved;
+  final Set<String> saved;
+  const _SaveIcon({
+    required this.resource,
+    required this.isSaved,
+    required this.saved,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return IconButton(
+      visualDensity: VisualDensity.compact,
+      icon: Icon(
+        isSaved ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+        color: isSaved ? AppColors.primary : Theme.of(context).hintColor,
+      ),
+      tooltip: isSaved ? 'Saved' : 'Save',
+      onPressed: () {
+        final ctrl = ref.read(savedResourceControllerProvider);
+        if (!ctrl.isReady) return;
+        ctrl.toggle(resource, saved);
+      },
     );
   }
 }

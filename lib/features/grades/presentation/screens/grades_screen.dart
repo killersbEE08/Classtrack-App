@@ -8,6 +8,8 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/theme/subject_icons.dart';
 import '../../../../shared/widgets/states.dart';
 import '../../../../shared/widgets/ui_kit.dart';
+import '../../../../shared/widgets/placement_slot.dart';
+import '../../../cms/domain/marketing.dart';
 import '../../../subjects/domain/subject.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../domain/grade_item.dart';
@@ -57,13 +59,17 @@ class GradesScreen extends ConsumerWidget {
                 begin: 0.08, curve: Curves.easeOut),
             const SizedBox(height: 12),
             _scaleToggle(context, ref),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+            const PlacementSlot(placement: Placements.grades),
+            const SizedBox(height: 8),
             Text('By subject', style: theme.textTheme.titleLarge),
             const SizedBox(height: 12),
             subjectsAsync.when(
               loading: () => const Padding(
                   padding: EdgeInsets.only(top: 30), child: LoadingView()),
-              error: (e, _) => ErrorView(error: e),
+              error: (e, _) => ErrorView(
+                  error: e,
+                  onRetry: () => ref.invalidate(subjectsStreamProvider)),
               data: (subjects) {
                 if (subjects.isEmpty) {
                   return _empty(context,
@@ -104,52 +110,55 @@ class GradesScreen extends ConsumerWidget {
   Widget _gpaCard(BuildContext context, GpaSummary gpa) {
     final theme = Theme.of(context);
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [AppColors.primaryLight, AppColors.primary],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(22),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text('GPA',
-                  style: theme.textTheme.labelLarge
+                  style: theme.textTheme.labelMedium
                       ?.copyWith(color: Colors.white70)),
-              const SizedBox(height: 4),
-              Text(
-                gpa.gradedSubjects == 0
-                    ? '—'
-                    : gpa.gpa.toStringAsFixed(2),
-                style: theme.textTheme.displaySmall?.copyWith(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 44,
-                    height: 1),
+              const SizedBox(height: 2),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    gpa.gradedSubjects == 0 ? '—' : gpa.gpa.toStringAsFixed(2),
+                    style: theme.textTheme.displaySmall?.copyWith(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 32,
+                        height: 1),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(gpa.maxPoints >= 10 ? '/ 10' : '/ 4.0',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: Colors.white70)),
+                ],
               ),
-              Text(gpa.maxPoints >= 10 ? 'out of 10' : 'out of 4.0',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: Colors.white70)),
             ],
           ),
           const Spacer(),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              _gpaStat(theme,
-                  gpa.gradedSubjects == 0
-                      ? '—'
-                      : '${gpa.averagePercent.toStringAsFixed(0)}%',
-                  'Average'),
-              const SizedBox(height: 14),
-              _gpaStat(theme, '${gpa.gradedSubjects}', 'Graded subjects'),
-            ],
-          ),
+          _gpaStat(
+              theme,
+              gpa.gradedSubjects == 0
+                  ? '—'
+                  : '${gpa.averagePercent.toStringAsFixed(0)}%',
+              'Average'),
+          const SizedBox(width: 20),
+          _gpaStat(theme, '${gpa.gradedSubjects}', 'Graded'),
         ],
       ),
     );
@@ -158,12 +167,13 @@ class GradesScreen extends ConsumerWidget {
   Widget _gpaStat(ThemeData theme, String value, String label) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
       children: [
         Text(value,
-            style: theme.textTheme.titleLarge?.copyWith(
+            style: theme.textTheme.titleMedium?.copyWith(
                 color: Colors.white, fontWeight: FontWeight.w800)),
         Text(label,
-            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70)),
+            style: theme.textTheme.labelSmall?.copyWith(color: Colors.white70)),
       ],
     );
   }

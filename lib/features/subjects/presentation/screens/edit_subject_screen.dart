@@ -28,6 +28,7 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
   late final TextEditingController _professor;
   late final TextEditingController _credits;
   late final TextEditingController _classLink;
+  late final TextEditingController _room;
   late int _colorHex;
   late String _iconKey;
   late List<_LinkFields> _links;  final List<_TimeBlock> _blocks = [];
@@ -47,6 +48,7 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
     _professor = TextEditingController(text: s?.professor ?? '');
     _credits = TextEditingController(text: s?.credits?.toString() ?? '');
     _classLink = TextEditingController(text: s?.classLink ?? '');
+    _room = TextEditingController(text: s?.room ?? '');
     _colorHex = s?.colorHex ?? AppColors.subjectPalette.first.toARGB32();
     _iconKey = s?.iconKey ?? SubjectIcons.defaultKey;
     _start = s?.startDate;
@@ -124,6 +126,7 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
     _professor.dispose();
     _credits.dispose();
     _classLink.dispose();
+    _room.dispose();
     for (final l in _links) {
       l.dispose();
     }
@@ -231,6 +234,7 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
       credits: int.tryParse(_credits.text.trim()),
       classLink:
           _classLink.text.trim().isEmpty ? null : _classLink.text.trim(),
+      room: _room.text.trim().isEmpty ? null : _room.text.trim(),
       resourceLinks: links,
       attended: widget.subject?.attended ?? 0,
       absent: widget.subject?.absent ?? 0,
@@ -535,6 +539,15 @@ class _EditSubjectScreenState extends ConsumerState<EditSubjectScreen> {
                     decoration: const InputDecoration(
                       labelText: 'Class link (Zoom / Meet / Teams)',
                       prefixIcon: Icon(Icons.videocam_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _room,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: const InputDecoration(
+                      labelText: 'Room / location (optional)',
+                      prefixIcon: Icon(Icons.meeting_room_outlined),
                     ),
                   ),
                   const SizedBox(height: 16),

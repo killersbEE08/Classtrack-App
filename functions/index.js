@@ -11,13 +11,17 @@
  */
 import { onCall, onRequest, HttpsError } from "firebase-functions/v2/https";
 import { onDocumentWritten, onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import { defineSecret } from "firebase-functions/params";
 import { initializeApp } from "firebase-admin/app";
 import { getStorage } from "firebase-admin/storage";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 import { getMessaging } from "firebase-admin/messaging";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { lookup as dnsLookup } from "node:dns/promises";
+import net from "node:net";
 import {
   canAssignRole,
   normalizeRole,
@@ -26,8 +30,106 @@ import {
   buildAuditEntry,
 } from "./roles.js";
 import { topicForCountry, buildFcmMessage } from "./notifications.js";
+import { computeLifecycleUpdate } from "./lifecycle.js";
+import {
+  classifyHttpStatus,
+  URL_FIELDS,
+  serializeHealth,
+} from "./url_health.js";
+import { metricField, dayId } from "./analytics_agg.js";
 
 initializeApp();
+
+/// Constant-time string comparison for secrets/tokens. Both inputs are hashed
+/// to a fixed 32-byte digest first so (a) the buffers are always equal length
+/// — `crypto.timingSafeEqual` throws otherwise — and (b) the comparison never
+/// leaks the secret's length or content through response timing. Returns false
+/// for any null/empty input so callers fail CLOSED.
+function timingSafeEqualStr(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || !a || !b) return false;
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
+
+// ── SSRF guard ─────────────────────────────────────────────────────────────
+// The link-health prober fetches URLs authored in the CMS. Without host
+// filtering, an editor (or a redirect from any external URL) could point it at
+// internal/cloud-metadata addresses (127.0.0.1, 10/8, 169.254.169.254, …),
+// enabling internal port-scanning from inside the project's network. These
+// helpers reject any hostname that resolves to a private/reserved IP.
+function _ipv4ToLong(ip) {
+  const p = ip.split(".");
+  if (p.length !== 4) return null;
+  let n = 0;
+  for (const part of p) {
+    const o = Number(part);
+    if (!Number.isInteger(o) || o < 0 || o > 255) return null;
+    n = n * 256 + o;
+  }
+  return n >>> 0;
+}
+function _isPrivateIPv4(ip) {
+  const n = _ipv4ToLong(ip);
+  if (n === null) return true; // unpar. → fail closed
+  const inRange = (base, bits) => {
+    const b = _ipv4ToLong(base);
+    const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+    return (n & mask) === (b & mask);
+  };
+  return (
+    inRange("0.0.0.0", 8) ||
+    inRange("10.0.0.0", 8) ||
+    inRange("100.64.0.0", 10) ||
+    inRange("127.0.0.0", 8) ||
+    inRange("169.254.0.0", 16) || // link-local + cloud metadata
+    inRange("172.16.0.0", 12) ||
+    inRange("192.0.0.0", 24) ||
+    inRange("192.0.2.0", 24) ||
+    inRange("192.168.0.0", 16) ||
+    inRange("198.18.0.0", 15) ||
+    inRange("198.51.100.0", 24) ||
+    inRange("203.0.113.0", 24) ||
+    inRange("224.0.0.0", 4) || // multicast
+    inRange("240.0.0.0", 4) // reserved
+  );
+}
+function _isPrivateIPv6(ip) {
+  const a = ip.toLowerCase();
+  if (a === "::1" || a === "::") return true;
+  const mapped = a.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return _isPrivateIPv4(mapped[1]);
+  return (
+    a.startsWith("fc") ||
+    a.startsWith("fd") || // ULA fc00::/7
+    a.startsWith("fe8") ||
+    a.startsWith("fe9") ||
+    a.startsWith("fea") ||
+    a.startsWith("feb") || // fe80::/10 link-local
+    a.startsWith("ff") // multicast
+  );
+}
+function _isPrivateIp(ip) {
+  const t = net.isIP(ip);
+  if (t === 4) return _isPrivateIPv4(ip);
+  if (t === 6) return _isPrivateIPv6(ip);
+  return true; // not an IP literal → fail closed
+}
+/// Throws if [hostname] is (or resolves to) a private/reserved address. Note:
+/// this checks at resolution time; a determined DNS-rebinding attacker could
+/// still race the subsequent connect, but combined with the redirect re-checks
+/// and status-only (no body) storage, the residual risk is minimal.
+async function assertPublicHost(hostname) {
+  if (net.isIP(hostname)) {
+    if (_isPrivateIp(hostname)) throw new Error("blocked private host");
+    return;
+  }
+  const results = await dnsLookup(hostname, { all: true });
+  if (!results || results.length === 0) throw new Error("no dns records");
+  for (const r of results) {
+    if (_isPrivateIp(r.address)) throw new Error("blocked private host");
+  }
+}
 
 const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 // Shared secret you set in the RevenueCat dashboard (Webhook → Authorization
@@ -68,7 +170,9 @@ async function isProUser(uid) {
 /// `_aiUsage/{uid}` in `${action}Period` / `${action}Count` fields so multiple
 /// actions and periods coexist without clobbering each other. Throws
 /// `resource-exhausted` once [max] is exceeded for the current period.
-async function enforcePeriodLimit(uid, action, max, period) {
+/// [message] overrides the default (AI-oriented) error text so non-AI callers
+/// (e.g. the referral endpoints) surface a sensible message.
+async function enforcePeriodLimit(uid, action, max, period, message) {
   const db = getFirestore();
   const ref = db.collection("_aiUsage").doc(uid);
   const now = new Date();
@@ -92,29 +196,35 @@ async function enforcePeriodLimit(uid, action, max, period) {
   if (count > max) {
     throw new HttpsError(
       "resource-exhausted",
-      "You've reached your AI usage limit. Upgrade to ClassTrack Pro for unlimited, or try again next month."
+      message ||
+        "You've reached your AI usage limit. Upgrade to ClassTrack Pro for unlimited, or try again next month."
     );
   }
 }
 
+// Lead with the "-latest" aliases so a future model retirement (like the
+// gemini-2.0-flash / gemini-1.5-flash shutdown that broke this list) resolves
+// to the current model automatically instead of 404-ing. Versioned entries are
+// kept as explicit fallbacks. Retired models (2.0-flash, 1.5-flash) removed.
 const MODELS = [
   "gemini-2.5-flash",
-  "gemini-2.0-flash",
   "gemini-flash-latest",
   "gemini-2.5-pro",
   "gemini-pro-latest",
-  "gemini-1.5-flash",
 ];
 
-// Chat prioritises the low-latency non-"thinking" flash models so replies come
-// back fast. (gemini-2.5-flash spends extra time "thinking" before answering,
-// which noticeably slows short conversational turns — so it's tried only as a
-// fallback here.) Ordered fastest → most-capable fallback.
+// Chat prioritises a low-latency flash model. We lead with the versioned
+// gemini-2.5-flash (confirmed responding; "thinking" is disabled below via
+// thinkingBudget:0 so it stays snappy) and keep the self-updating
+// "gemini-flash-latest" alias as a fallback so a model retirement can't
+// silently break chat again. Retired models (gemini-2.0-flash,
+// gemini-1.5-flash) removed — they now 404 ("no longer available"), which made
+// every model attempt run to failure and pushed the function past its 120s
+// timeout, surfacing in the app as a bogus "check your connection" error.
 const CHAT_MODELS = [
-  "gemini-2.0-flash",
-  "gemini-flash-latest",
   "gemini-2.5-flash",
-  "gemini-1.5-flash",
+  "gemini-flash-latest",
+  "gemini-pro-latest",
 ];
 
 /// Generate text, trying each model until one works. [request] is whatever
@@ -198,7 +308,7 @@ Return ONLY valid JSON that matches this exact shape — no prose, no markdown f
 }
 Rules:
 - Merge repeated classes of the same subject into one subject with multiple sessions.
-- Convert all times to 24-hour HH:MM. If only a start time is given, set end = start + 1 hour.
+- Convert all times to 24-hour HH:MM. PM times add 12 to the hour: 1:20 PM → 13:20, 2 PM → 14:00, 6:30 PM → 18:30. Noon 12 PM → 12:00; midnight 12 AM → 00:00. A class's end must be LATER than its start on the same day — if your conversion makes the end fall before the start (e.g. 11:20 → 01:20), you mis-read an afternoon time as AM, so correct it to PM. If only a start time is given, set end = start + 1 hour.
 - Use null (not empty string) when a professor or room is unknown.
 - TERM DATES: If the timetable states a semester/term/course date range (e.g. "Winter semester 2026: classes run from January 6 to March 21, 2026"), set "startDate" and "endDate" (as YYYY-MM-DD) on EVERY subject it applies to. Infer the year from the timetable when given; otherwise use null. Use null for startDate/endDate when no such range is stated — never guess a range.
 - Set "confidence" to how sure you are the extraction is correct.
@@ -233,7 +343,7 @@ SCHEDULE: When the user gives enough info to build/change their timetable (from 
   "confidence": "high" | "medium" | "low"
 }
 \`\`\`
-Merge repeated classes into one subject with multiple sessions; convert times to 24h HH:MM; if only a start time is given set end = start + 1 hour; use null for unknown professor/room. TERM DATES: if the user (or the image) gives a semester/term/course date range — e.g. "Winter semester 2026, classes from January 6 to March 21" — set "startDate" and "endDate" (YYYY-MM-DD) on EVERY subject that range covers; infer the year from what's given. Use null when no range is stated; never invent one. Only include the schedule block when you actually have timetable data. NEVER invent sessions, NEVER fill all seven days, and NEVER guess times — include only the exact days and times the user stated. If the user only expresses a vague wish to study a topic (not a real timetable with days/times), do NOT produce a schedule; ask which days and times instead.
+Merge repeated classes into one subject with multiple sessions; convert times to 24h HH:MM (PM adds 12 to the hour: 1:20 PM → 13:20, 6 PM → 18:00; noon → 12:00; midnight → 00:00; an end must be later than its start — if it isn't, you mis-read a PM time as AM, so fix it); if only a start time is given set end = start + 1 hour; use null for unknown professor/room. TERM DATES: if the user (or the image) gives a semester/term/course date range — e.g. "Winter semester 2026, classes from January 6 to March 21" — set "startDate" and "endDate" (YYYY-MM-DD) on EVERY subject that range covers; infer the year from what's given. Use null when no range is stated; never invent one. Only include the schedule block when you actually have timetable data. NEVER invent sessions, NEVER fill all seven days, and NEVER guess times — include only the exact days and times the user stated. If the user only expresses a vague wish to study a topic (not a real timetable with days/times), do NOT produce a schedule; ask which days and times instead.
 
 ACTIONS (invisible automation): When the user's message clearly asks to log or schedule something, ALSO append a fenced code block labelled \`actions\` containing ONLY this JSON. The app runs these silently to update the UI, so keep your visible reply to one short, warm confirmation sentence (e.g. "Done — logged ₹20 for food." or "Added your DP-800 exam for tomorrow."). Never mention JSON, code, or "actions".
 \`\`\`actions
@@ -288,6 +398,36 @@ function dropHallucinatedWeek(sessions) {
   return distinctSlots.size === 1 ? [] : sessions;
 }
 
+/// Repairs a 12h→24h slip where an afternoon (PM) end time was written as its
+/// AM twin — e.g. a class ending at 1:20 PM emitted as "01:20", or noon as
+/// "00:00". Gemini occasionally forgets the +12 for PM end times, which stores
+/// an end BEFORE the start and breaks the "in progress" / duration logic in the
+/// app. When the end is not after the start, bumping it 12h usually restores
+/// the intended time; we only do so when the result lands after the start and
+/// still inside the same day, leaving genuine sessions untouched.
+function normalizeEndTime24(start, end) {
+  const parse = (t) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec((t || "").trim());
+    if (!m) return null;
+    const h = Number(m[1]);
+    const mi = Number(m[2]);
+    if (h < 0 || h > 23 || mi < 0 || mi > 59) return null;
+    return h * 60 + mi;
+  };
+  const s = parse(start);
+  const e = parse(end);
+  if (s === null || e === null) return end;
+  if (e <= s) {
+    const bumped = e + 12 * 60;
+    if (bumped > s && bumped < 24 * 60) {
+      const h = String(Math.floor(bumped / 60)).padStart(2, "0");
+      const mi = String(bumped % 60).padStart(2, "0");
+      return `${h}:${mi}`;
+    }
+  }
+  return end;
+}
+
 function sanitize(parsed) {
   const subjects = Array.isArray(parsed?.subjects) ? parsed.subjects : [];
   // Accepts "YYYY-MM-DD" only; anything else becomes null so the client never
@@ -300,12 +440,16 @@ function sanitize(parsed) {
     .map((s) => {
       const sessions = Array.isArray(s?.sessions) ? s.sessions : [];
       const cleanSessions = sessions
-        .map((se) => ({
-          day: DAYS.includes(se?.day) ? se.day : "Monday",
-          start: typeof se?.start === "string" ? se.start : "09:00",
-          end: typeof se?.end === "string" ? se.end : "10:00",
-          room: se?.room ?? null,
-        }))
+        .map((se) => {
+          const start = typeof se?.start === "string" ? se.start : "09:00";
+          const end = typeof se?.end === "string" ? se.end : "10:00";
+          return {
+            day: DAYS.includes(se?.day) ? se.day : "Monday",
+            start,
+            end: normalizeEndTime24(start, end),
+            room: se?.room ?? null,
+          };
+        })
         .filter((se) => /^\d{1,2}:\d{2}$/.test(se.start));
       return {
         name: typeof s?.name === "string" ? s.name.trim() : "Untitled",
@@ -358,7 +502,14 @@ export const parseSchedule = onCall(
 
       // Prefer Storage read when a path is given and the file belongs to the user.
       if (!base64 && storagePath) {
-        if (!storagePath.startsWith(`users/${request.auth.uid}/`)) {
+        // Must live under the caller's own folder, and must not attempt path
+        // traversal out of it. (GCS treats ".." as a literal segment, but we
+        // reject it defensively so the ownership prefix can never be bypassed.)
+        if (
+          typeof storagePath !== "string" ||
+          !storagePath.startsWith(`users/${request.auth.uid}/`) ||
+          storagePath.includes("..")
+        ) {
           throw new HttpsError("permission-denied", "Invalid file path.");
         }
         const [buf] = await getStorage().bucket().file(storagePath).download();
@@ -367,6 +518,12 @@ export const parseSchedule = onCall(
 
       if (!base64) {
         throw new HttpsError("invalid-argument", "No file data provided.");
+      }
+      // Cap the decoded upload at ~10 MB (mirrors the Storage-rules cap) so a
+      // client can't push an oversized inline payload to run up Gemini cost or
+      // exhaust function memory. base64 is ~4/3 the byte size.
+      if (typeof base64 !== "string" || base64.length > 14 * 1024 * 1024) {
+        throw new HttpsError("invalid-argument", "File is too large (max 10 MB).");
       }
 
       parts = [
@@ -386,7 +543,10 @@ export const parseSchedule = onCall(
       });
     } catch (err) {
       console.error("Gemini call failed", err);
-      throw new HttpsError("internal", String(err?.message || err));
+      throw new HttpsError(
+        "internal",
+        "Couldn't process the schedule right now. Please try again."
+      );
     }
 
     let parsed;
@@ -442,6 +602,9 @@ export const chat = onCall(
         .map((p) => {
           if (p && typeof p.text === "string") return { text: p.text };
           if (p && p.inlineData && typeof p.inlineData.data === "string") {
+            // Drop oversized inline images (~10 MB decoded) to guard function
+            // memory and Gemini cost from an abusive client payload.
+            if (p.inlineData.data.length > 14 * 1024 * 1024) return null;
             return {
               inlineData: {
                 data: p.inlineData.data,
@@ -480,8 +643,215 @@ export const chat = onCall(
       };
     } catch (err) {
       console.error("Gemini chat failed", err);
-      throw new HttpsError("internal", String(err?.message || err));
+      throw new HttpsError(
+        "internal",
+        "The assistant is unavailable right now. Please try again."
+      );
     }
+  }
+);
+
+
+// ── draftResource: AI-assisted CMS authoring ────────────────────────────────
+//
+// Editors paste the raw details of an opportunity / discount (or a bunch of
+// them) and Gemini returns a STRICT JSON draft that maps 1:1 onto the CMS
+// resource editor's fields. NOTHING is written to Firestore here — the client
+// loads the draft into the editor for human review and only then saves it
+// (always as a draft first) through the normal, rules-gated write path.
+//
+// Editorial/authority fields (status, sponsored, featured, verified, priority)
+// are deliberately NOT produced by the model — those stay a human decision.
+
+/** Stable resource type keys — mirrors lib/.../resource_type.dart. */
+const RESOURCE_TYPES = [
+  "scholarship", "internship", "discount", "hackathon", "competition",
+  "ambassador", "course", "certification", "research", "event", "job",
+  "grant", "exchange", "conference", "startup",
+];
+
+const RESOURCE_SYSTEM = `You are a meticulous content editor for a student "opportunities & perks" catalog (scholarships, internships, hackathons, free courses, student discounts, etc.).
+Given the raw details of ONE opportunity or discount, produce a clean, structured draft as ONLY valid JSON matching this EXACT shape — no prose, no markdown fences:
+{
+  "type": one of ${RESOURCE_TYPES.map((t) => `"${t}"`).join("|")} | null,
+  "title": string,
+  "organization": string,
+  "description": string,            // one or two sentence summary
+  "fullDescription": string | null, // longer body, plain text
+  "eligibility": string | null,
+  "benefits": string | null,
+  "howToApply": string | null,
+  "requirements": string | null,
+  "officialWebsite": string | null,
+  "applicationUrl": string | null,
+  "affiliateUrl": string | null,
+  "company": string | null,               // discounts: the brand
+  "discountText": string | null,          // e.g. "50% off Pro for students"
+  "discountCode": string | null,
+  "discountPercent": number | null,
+  "redemptionInstructions": string | null,
+  "redemptionUrl": string | null,
+  "terms": string | null,
+  "countries": string[],                    // [] or ["Global"] = everywhere
+  "tags": string[],
+  "categories": string[],
+  "targetDegrees": string[],
+  "targetDepartments": string[],
+  "targetInterests": string[],
+  "targetCareerGoals": string[],
+  "targetAcademicYears": number[],          // e.g. [1,2,3]
+  "startDate": "YYYY-MM-DD" | null,
+  "deadline": "YYYY-MM-DD" | null,
+  "remote": boolean | null,
+  "paid": boolean | null,
+  "confidence": "high" | "medium" | "low",
+  "notes": string | null                    // short caveats for the human reviewer
+}
+Rules:
+- Fill only what the input clearly supports. Use null (or [] for lists) for anything not stated — NEVER invent URLs, discount codes, deadlines, dates or eligibility.
+- Write clear, neutral, plain text (no markdown, no emojis, no marketing hype).
+- Dates must be strict "YYYY-MM-DD" or null. Only include a year you can justify from the input.
+- Pick the single best "type" from the allowed list; if unsure, use null.
+- For a student discount, prefer "company"/"discountText"/"redemptionInstructions" and set type "discount".
+- Put any assumptions, missing-info flags or things to double-check in "notes".
+- Set "confidence" to how complete/reliable the extraction is.`;
+
+/** Whitelists + coerces the model's output to the exact draft contract above. */
+function sanitizeResourceDraft(parsed) {
+  const p = parsed && typeof parsed === "object" ? parsed : {};
+  const str = (v, max = 4000) =>
+    typeof v === "string" && v.trim().length > 0
+      ? v.trim().slice(0, max)
+      : null;
+  const strList = (v) =>
+    Array.isArray(v)
+      ? v
+          .map((e) => (typeof e === "string" ? e.trim() : String(e ?? "").trim()))
+          .filter((e) => e.length > 0)
+          .slice(0, 30)
+      : [];
+  const intList = (v) =>
+    Array.isArray(v)
+      ? v
+          .map((e) => (typeof e === "number" ? Math.trunc(e) : parseInt(e, 10)))
+          .filter((e) => Number.isFinite(e) && e >= 0 && e <= 20)
+          .slice(0, 12)
+      : [];
+  const cleanDate = (v) =>
+    typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.trim())
+      ? v.trim()
+      : null;
+  const bool = (v) => (typeof v === "boolean" ? v : null);
+  const num = (v) =>
+    typeof v === "number" && Number.isFinite(v)
+      ? v
+      : typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))
+      ? Number(v)
+      : null;
+
+  return {
+    type: RESOURCE_TYPES.includes(p.type) ? p.type : null,
+    title: str(p.title, 160) || "",
+    organization: str(p.organization, 160) || "",
+    description: str(p.description, 600) || "",
+    fullDescription: str(p.fullDescription),
+    eligibility: str(p.eligibility),
+    benefits: str(p.benefits),
+    howToApply: str(p.howToApply),
+    requirements: str(p.requirements),
+    officialWebsite: str(p.officialWebsite, 500),
+    applicationUrl: str(p.applicationUrl, 500),
+    affiliateUrl: str(p.affiliateUrl, 500),
+    company: str(p.company, 160),
+    discountText: str(p.discountText, 300),
+    discountCode: str(p.discountCode, 120),
+    discountPercent: num(p.discountPercent),
+    redemptionInstructions: str(p.redemptionInstructions),
+    redemptionUrl: str(p.redemptionUrl, 500),
+    terms: str(p.terms),
+    countries: strList(p.countries),
+    tags: strList(p.tags),
+    categories: strList(p.categories),
+    targetDegrees: strList(p.targetDegrees),
+    targetDepartments: strList(p.targetDepartments),
+    targetInterests: strList(p.targetInterests),
+    targetCareerGoals: strList(p.targetCareerGoals),
+    targetAcademicYears: intList(p.targetAcademicYears),
+    startDate: cleanDate(p.startDate),
+    deadline: cleanDate(p.deadline),
+    remote: bool(p.remote),
+    paid: bool(p.paid),
+    confidence: ["high", "medium", "low"].includes(p.confidence)
+      ? p.confidence
+      : "low",
+    notes: str(p.notes, 800),
+  };
+}
+
+/**
+ * AI-assisted resource authoring for the CMS. Editor+ only. Returns a sanitized
+ * draft (never writes it); the client reviews and saves through the normal
+ * rules-gated path. The Gemini key stays server-side.
+ */
+export const draftResource = onCall(
+  { secrets: [GEMINI_API_KEY], cors: true, timeoutSeconds: 120, memory: "512MiB" },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in.");
+    }
+    // Authoring resources is an editor+ capability (mirrors the Firestore
+    // write rules). Re-checked here so the AI helper can't be called by a
+    // lower-privileged or student account.
+    if (roleRank(request.auth.token.role) < ROLE_RANK.editor) {
+      throw new HttpsError("permission-denied", "Editors only.");
+    }
+    // Generous per-editor daily safety cap to guard against runaway cost/abuse.
+    await enforcePeriodLimit(request.auth.uid, "draftResource", 200, "day");
+
+    const details =
+      typeof request.data?.details === "string" ? request.data.details.trim() : "";
+    if (details.length < 3) {
+      throw new HttpsError("invalid-argument", "Provide the opportunity details.");
+    }
+    const typeHint = RESOURCE_TYPES.includes(request.data?.type)
+      ? request.data.type
+      : null;
+
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
+    const prompt = typeHint
+      ? `The editor expects this to be a "${typeHint}" (use a different type only if clearly wrong).\n\nDetails:\n${details}`
+      : `Details:\n${details}`;
+
+    let raw;
+    try {
+      raw = await generateText(genAI, {
+        systemInstruction: RESOURCE_SYSTEM,
+        jsonOut: true,
+        request: [{ text: prompt }],
+        maxOutputTokens: 2048,
+      });
+    } catch (err) {
+      console.error("Gemini draftResource failed", err);
+      throw new HttpsError(
+        "internal",
+        "Couldn't generate a draft right now. Please try again."
+      );
+    }
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (_) {
+      const stripped = raw.replace(/```json|```/g, "").trim();
+      try {
+        parsed = JSON.parse(stripped);
+      } catch (e2) {
+        console.error("Unparseable draftResource output", raw);
+        throw new HttpsError("internal", "AI returned an unreadable response.");
+      }
+    }
+
+    return sanitizeResourceDraft(parsed);
   }
 );
 
@@ -507,7 +877,19 @@ export const revenueCatWebhook = onRequest(
     }
     const expected = REVENUECAT_WEBHOOK_AUTH.value();
     const got = req.get("Authorization") || "";
-    if (expected && got !== expected) {
+    // Fail CLOSED. If the shared secret isn't configured we reject EVERYTHING
+    // rather than silently accepting unauthenticated calls — otherwise a
+    // missing/empty secret would let anyone POST this endpoint and grant
+    // themselves (or anyone) Pro. The comparison is constant-time so the secret
+    // can't be recovered byte-by-byte via response timing.
+    if (!expected) {
+      console.error(
+        "revenueCatWebhook: REVENUECAT_WEBHOOK_AUTH is not set — refusing all requests."
+      );
+      res.status(503).send("Webhook not configured");
+      return;
+    }
+    if (!timingSafeEqualStr(got, expected)) {
       res.status(401).send("Unauthorized");
       return;
     }
@@ -659,6 +1041,16 @@ export const getReferralInfo = onCall({ cors: true }, async (request) => {
     throw new HttpsError("unauthenticated", "Sign in to get your invite code.");
   }
   const uid = request.auth.uid;
+  // Abuse guard: this endpoint runs a transaction (and can grant Pro days), so
+  // cap how often a single account may call it. Generous enough for normal use
+  // (screen opens + pull-to-refresh) while stopping automated hammering.
+  await enforcePeriodLimit(
+    uid,
+    "getReferralInfo",
+    60,
+    "day",
+    "Too many requests. Please try again later."
+  );
   const db = getFirestore();
   const userRef = db.collection("users").doc(uid);
   const entRef = db.collection("_entitlements").doc(uid);
@@ -695,7 +1087,24 @@ export const getReferralInfo = onCall({ cors: true }, async (request) => {
       referralCount * REFERRAL_REWARD_DAYS +
       (referredBy ? REFERRAL_REWARD_DAYS : 0);
     const grantedDays = data.referralProDaysGranted || 0;
-    const missingDays = owedDays - grantedDays;
+    // Defence-in-depth: even though the referral fields are backend-owned
+    // (Firestore rules forbid client writes), sanitise the inputs and CAP the
+    // amount we ever auto-grant here, so a data glitch (or a future rules
+    // regression) can never mint an absurd Pro entitlement.
+    const safeCount = Number.isFinite(referralCount)
+      ? Math.max(0, Math.floor(referralCount))
+      : 0;
+    const safeOwed =
+      safeCount * REFERRAL_REWARD_DAYS +
+      (referredBy ? REFERRAL_REWARD_DAYS : 0);
+    const safeGranted = Number.isFinite(grantedDays)
+      ? Math.max(0, Math.floor(grantedDays))
+      : 0;
+    const MAX_REFERRAL_PRO_DAYS = 3650; // 10 years — a sane hard ceiling
+    const missingDays = Math.min(
+      Math.max(0, safeOwed - safeGranted),
+      MAX_REFERRAL_PRO_DAYS
+    );
 
     // ---- writes (all reads above are complete) ----
     if (mapRef) {
@@ -704,7 +1113,8 @@ export const getReferralInfo = onCall({ cors: true }, async (request) => {
     }
     if (missingDays > 0) {
       grantProDaysTx(tx, entRef, entSnap, missingDays, Date.now());
-      tx.set(userRef, { referralProDaysGranted: owedDays }, { merge: true });
+      tx.set(userRef, { referralProDaysGranted: safeGranted + missingDays },
+          { merge: true });
     }
 
     return {
@@ -768,6 +1178,17 @@ export const redeemReferral = onCall({ cors: true }, async (request) => {
   if (code.length < 4) {
     throw new HttpsError("invalid-argument", "Enter a valid invite code.");
   }
+
+  // Brute-force / enumeration guard: cap redemption ATTEMPTS per account per
+  // day (a legitimate user only ever redeems once). This runs BEFORE the code
+  // lookup so guessing invalid codes is throttled too.
+  await enforcePeriodLimit(
+    uid,
+    "redeemReferral",
+    15,
+    "day",
+    "Too many attempts. Please try again later."
+  );
 
   const db = getFirestore();
 
@@ -860,9 +1281,24 @@ export const redeemReferral = onCall({ cors: true }, async (request) => {
 /** Appends an audit-log entry with a server timestamp. Never throws. */
 async function writeAudit(entry) {
   try {
+    // Enrich with the actor's email (best-effort) so the CMS can show a
+    // human-readable "who" without needing to read the users collection.
+    let actorEmail = null;
+    const uid = entry.actorUid;
+    if (uid && uid !== "system" && uid !== "unknown") {
+      try {
+        actorEmail = (await getAuth().getUser(uid)).email || null;
+      } catch (_) {
+        /* actor may be deleted; leave null */
+      }
+    }
     await getFirestore()
       .collection("auditLogs")
-      .add({ ...buildAuditEntry(entry), at: FieldValue.serverTimestamp() });
+      .add({
+        ...buildAuditEntry(entry),
+        actorEmail,
+        at: FieldValue.serverTimestamp(),
+      });
   } catch (e) {
     console.error("audit write failed", e);
   }
@@ -939,6 +1375,32 @@ export const setUserRole = onCall({ cors: true }, async (request) => {
   return { ok: true, uid: targetUid, role: targetRole };
 });
 
+/**
+ * lookupUserByEmail — resolves an email to { uid, email, displayName, role }
+ * so admins can find a user without knowing their uid. Admins only; the CMS
+ * cannot query the users collection by email under the security rules.
+ */
+export const lookupUserByEmail = onCall({ cors: true }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in.");
+  const caller = normalizeRole(request.auth.token.role);
+  if (!["super_admin", "admin"].includes(caller)) {
+    throw new HttpsError("permission-denied", "Admins only.");
+  }
+  const email = String(request.data?.email || "").trim().toLowerCase();
+  if (!email) throw new HttpsError("invalid-argument", "email is required.");
+  try {
+    const u = await getAuth().getUserByEmail(email);
+    return {
+      uid: u.uid,
+      email: u.email || email,
+      displayName: u.displayName || null,
+      role: normalizeRole(u.customClaims?.role),
+    };
+  } catch (_) {
+    throw new HttpsError("not-found", "No user found with that email.");
+  }
+});
+
 /** Derives create/update/delete from a Firestore write event. */
 function writeAction(event) {
   const before = event.data?.before?.exists;
@@ -966,6 +1428,7 @@ function contentAuditTrigger(collection, targetType) {
       details: {
         statusFrom: before.status || null,
         statusTo: after.status || null,
+        title: after.title || before.title || null,
       },
     });
   });
@@ -975,6 +1438,302 @@ function contentAuditTrigger(collection, targetType) {
 export const auditResourceWrite = contentAuditTrigger("resources", "resource");
 export const auditBannerWrite = contentAuditTrigger("banners", "banner");
 export const auditCampaignWrite = contentAuditTrigger("campaigns", "campaign");
+
+/**
+ * runResourceSchedule — enforces scheduled publishing/unpublishing server-side.
+ *
+ * The client can never be trusted to flip a draft to student-visible, so a
+ * periodic job does it: it publishes drafts whose `scheduledPublishAt` is due
+ * and hides resources whose `scheduledUnpublishAt` is due. Writes are stamped
+ * `updatedBy:"system"` so the existing audit trigger records each transition.
+ *
+ * Date-driven feed states (opening-soon / active / applications-closed) are
+ * already derived deterministically from start/deadline on read
+ * (resolveResourceStatus), so this job only handles the manual→visible publish
+ * and the scheduled unpublish transitions.
+ */
+export const runResourceSchedule = onSchedule("every 15 minutes", async () => {
+  const db = getFirestore();
+  const now = Timestamp.now();
+  const nowMs = now.toMillis();
+
+  const apply = async (docSnap) => {
+    const d = docSnap.data() || {};
+    const update = computeLifecycleUpdate({
+      status: d.status,
+      scheduledPublishMs: d.scheduledPublishAt?.toMillis?.(),
+      scheduledUnpublishMs: d.scheduledUnpublishAt?.toMillis?.(),
+      publishedAtMs: d.publishedAt?.toMillis?.(),
+      nowMs,
+    });
+    if (!update) return false;
+    const patch = {
+      status: update.status,
+      updatedBy: "system",
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    if (update.setPublishedAt) patch.publishedAt = FieldValue.serverTimestamp();
+    if (update.clearPublish) patch.scheduledPublishAt = FieldValue.delete();
+    if (update.clearUnpublish) {
+      patch.scheduledUnpublishAt = FieldValue.delete();
+    }
+    await docSnap.ref.set(patch, { merge: true });
+    return true;
+  };
+
+  const publishDue = await db
+    .collection("resources")
+    .where("status", "==", "draft")
+    .where("scheduledPublishAt", "<=", now)
+    .get();
+  const unpublishDue = await db
+    .collection("resources")
+    .where("scheduledUnpublishAt", "<=", now)
+    .get();
+
+  let changed = 0;
+  for (const snap of publishDue.docs) {
+    if (await apply(snap)) changed++;
+  }
+  for (const snap of unpublishDue.docs) {
+    if (await apply(snap)) changed++;
+  }
+  console.log(`runResourceSchedule: ${changed} resource(s) transitioned.`);
+});
+
+/* ============================ URL HEALTH =================================
+ * ClassTrack depends on external opportunity/discount links, so we track their
+ * health server-side (never from the unreliable Flutter Web client). A per-URL
+ * record { state, httpStatus, checkedAt } is stored under `urlHealth` on each
+ * resource. Editors trigger an on-demand check; a daily job sweeps the library.
+ * ======================================================================== */
+
+/** HEAD-probes a URL (falling back to GET), returning a health record.
+ *  SSRF-hardened: only http(s), and every hop (including redirects) must
+ *  resolve to a PUBLIC address — internal/metadata targets are refused. */
+async function probeUrl(url) {
+  if (!url || typeof url !== "string" || !/^https?:\/\//i.test(url)) {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  const baseOpts = {
+    // Manual redirects so we can re-validate the host of EACH hop (an external
+    // URL could 30x-redirect into the internal network otherwise).
+    redirect: "manual",
+    signal: controller.signal,
+    headers: { "User-Agent": "ClassTrackBot/1.0 (+link-health)" },
+  };
+  const broken = () => ({ state: "broken", httpStatus: null, checkedAt: Timestamp.now() });
+  const MAX_REDIRECTS = 4;
+  try {
+    let current = url;
+    let method = "HEAD";
+    let lastStatus = null;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      let parsed;
+      try {
+        parsed = new URL(current);
+      } catch (_) {
+        return broken();
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return broken();
+      }
+      // SSRF guard — refuse internal/private/metadata hosts.
+      try {
+        await assertPublicHost(parsed.hostname);
+      } catch (_) {
+        return broken();
+      }
+
+      let res = await fetch(current, { ...baseOpts, method });
+      lastStatus = res.status;
+      // Some servers reject HEAD — retry once as GET on the same URL.
+      if (method === "HEAD" && [405, 501, 403].includes(res.status)) {
+        method = "GET";
+        res = await fetch(current, { ...baseOpts, method });
+        lastStatus = res.status;
+      }
+      // Manually follow a redirect, re-validating the next host on the loop.
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get("location");
+        if (!loc) break;
+        current = new URL(loc, current).toString();
+        method = "GET";
+        continue;
+      }
+      return {
+        state: classifyHttpStatus(res.status),
+        httpStatus: res.status,
+        checkedAt: Timestamp.now(),
+      };
+    }
+    // Exceeded the redirect budget.
+    return {
+      state: lastStatus ? classifyHttpStatus(lastStatus) : "broken",
+      httpStatus: lastStatus,
+      checkedAt: Timestamp.now(),
+    };
+  } catch (_) {
+    return broken();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Checks a resource's URL fields and writes the `urlHealth` map. */
+async function checkResourceHealth(docRef, data) {
+  const health = {};
+  for (const field of URL_FIELDS) {
+    const rec = await probeUrl(data[field]);
+    if (rec) health[field] = rec;
+  }
+  if (Object.keys(health).length > 0) {
+    await docRef.set(
+      {
+        urlHealth: health,
+        urlHealthCheckedAt: Timestamp.now(),
+        updatedBy: "system",
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+  return health;
+}
+
+/**
+ * checkResourceUrls — on-demand link check for one resource (editor button).
+ * Editors/moderators only. Returns the fresh health map for immediate UI.
+ */
+export const checkResourceUrls = onCall({ cors: true }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "Sign in.");
+  const r = normalizeRole(request.auth.token.role);
+  if (!["super_admin", "admin", "editor", "moderator"].includes(r)) {
+    throw new HttpsError("permission-denied", "Not allowed.");
+  }
+  const id = String(request.data?.resourceId || "").trim();
+  if (!id) throw new HttpsError("invalid-argument", "resourceId is required.");
+  const db = getFirestore();
+  const snap = await db.collection("resources").doc(id).get();
+  if (!snap.exists) throw new HttpsError("not-found", "Resource not found.");
+  const health = await checkResourceHealth(snap.ref, snap.data());
+  return { ok: true, health: serializeHealth(health) };
+});
+
+/**
+ * scheduledUrlHealthScan — daily sweep of a batch of resources. Runs a small
+ * capped batch with limited concurrency so it stays well within timeout; the
+ * on-demand callable covers immediacy.
+ */
+export const scheduledUrlHealthScan = onSchedule(
+  { schedule: "every 24 hours", timeoutSeconds: 540 },
+  async () => {
+    const db = getFirestore();
+    const snap = await db.collection("resources").limit(60).get();
+    const docs = snap.docs.filter((d) => {
+      const s = d.data().status;
+      return s !== "draft" && s !== "hidden";
+    });
+    let checked = 0;
+    // Process in small concurrent batches.
+    for (let i = 0; i < docs.length; i += 5) {
+      const batch = docs.slice(i, i + 5);
+      await Promise.all(
+        batch.map(async (d) => {
+          await checkResourceHealth(d.ref, d.data());
+          checked++;
+        })
+      );
+    }
+    console.log(`scheduledUrlHealthScan: checked ${checked} resource(s).`);
+  }
+);
+
+/* ============================== ANALYTICS ================================
+ * Students write append-only `events/{id}` docs (create-only by rules). This
+ * trigger folds each into queryable counters: per-resource all-time totals
+ * (`resourceMetrics/{resourceId}`) for Top Content, and per-day global totals
+ * (`metricsDaily/{yyyymmdd}`) for windowed funnels. Firebase Analytics events
+ * are NOT queryable from Firestore, so this is the source of CMS numbers.
+ * ======================================================================== */
+export const aggregateEvent = onDocumentCreated("events/{id}", async (event) => {
+  const d = event.data?.data() || {};
+  const field = metricField(d.event);
+  const resourceId = d.resourceId;
+  if (!field || typeof resourceId !== "string" || !resourceId ||
+      resourceId.length > 200) {
+    return;
+  }
+
+  const db = getFirestore();
+  // Anti-poisoning: only fold in events for a resource that ACTUALLY exists,
+  // and take type/title from the trusted resource doc — never from the
+  // client-written event — so a forged/spammed event can't create junk metrics
+  // docs or spoof the labels shown in the CMS.
+  const resSnap = await db.collection("resources").doc(resourceId).get();
+  if (!resSnap.exists) return;
+  const res = resSnap.data() || {};
+
+  const inc = FieldValue.increment(1);
+  const day = dayId(new Date());
+  const batch = db.batch();
+  batch.set(
+    db.collection("resourceMetrics").doc(resourceId),
+    {
+      [field]: inc,
+      type: res.type || null,
+      title: res.title || null,
+      updatedAt: FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+  batch.set(
+    db.collection("metricsDaily").doc(day),
+    { [field]: inc, day },
+    { merge: true }
+  );
+  await batch.commit();
+});
+
+/* =========================== AUDIENCE COUNTS ============================
+ * Maintains `audienceCounts/summary` — a small aggregate of the user base
+ * ({ total, country: { <country>: n } }) — so the notification composer can
+ * show real "estimated recipients" without the CMS reading the users
+ * collection (which rules forbid). Updated on every users/{uid} write.
+ * ======================================================================== */
+export const maintainAudienceCounts = onDocumentWritten(
+  "users/{uid}",
+  async (event) => {
+    const before = event.data?.before?.exists
+      ? event.data.before.data()
+      : null;
+    const after = event.data?.after?.exists ? event.data.after.data() : null;
+    const beforeC = before?.country || null;
+    const afterC = after?.country || null;
+
+    const country = {};
+    let totalDelta = 0;
+    if (!before && after) totalDelta = 1;
+    if (before && !after) totalDelta = -1;
+
+    if (beforeC !== afterC) {
+      if (before && beforeC) country[beforeC] = FieldValue.increment(-1);
+      if (after && afterC) country[afterC] = FieldValue.increment(1);
+    }
+
+    const patch = {};
+    if (totalDelta !== 0) patch.total = FieldValue.increment(totalDelta);
+    if (Object.keys(country).length) patch.country = country;
+    if (Object.keys(patch).length === 0) return;
+
+    await getFirestore()
+      .collection("audienceCounts")
+      .doc("summary")
+      .set(patch, { merge: true });
+  }
+);
 
 
 /**

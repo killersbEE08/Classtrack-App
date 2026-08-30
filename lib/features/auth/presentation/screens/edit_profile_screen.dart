@@ -169,195 +169,392 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     if (profile != null) _seed(profile);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Edit profile'),
-        actions: [
-          TextButton(
-            onPressed: _saving ? null : _save,
-            child: _saving
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Save'),
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Edit profile')),
+      bottomNavigationBar: _saveBar(theme),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
           children: [
+            _headerPreview(theme, profile?.email),
+            const SizedBox(height: 16),
             _intro(theme),
-            const SizedBox(height: 16),
-            _section(theme, 'Account'),
-            _card(
+            const SizedBox(height: 18),
+            _sectionCard(
               theme,
-              child: TextFormField(
-                controller: _name,
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(
-                  labelText: 'Display name',
-                  border: InputBorder.none,
+              icon: Icons.badge_rounded,
+              title: 'Account',
+              children: [
+                _input(_name, 'Display name',
+                    capitalize: true,
+                    icon: Icons.person_rounded,
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? null
+                        : Validators.name(v)),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _sectionCard(
+              theme,
+              icon: Icons.location_on_rounded,
+              title: 'Location',
+              subtitle: 'Improves your opportunity & perk matches',
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: _country,
+                  isExpanded: true,
+                  decoration: _decoration(theme, 'Country',
+                      icon: Icons.public_rounded),
+                  items: [
+                    const DropdownMenuItem<String>(
+                        value: null, child: Text('Not set')),
+                    ...ProfileOptions.countries.map((c) =>
+                        DropdownMenuItem<String>(value: c, child: Text(c))),
+                  ],
+                  onChanged: (v) => setState(() => _country = v),
                 ),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? null : Validators.name(v),
-              ),
+                const SizedBox(height: 12),
+                _input(_state, 'State / region', icon: Icons.map_rounded),
+                const SizedBox(height: 12),
+                _input(_city, 'City', icon: Icons.location_city_rounded),
+              ],
             ),
-            const SizedBox(height: 16),
-            _section(theme, 'Location'),
-            _card(
+            const SizedBox(height: 14),
+            _sectionCard(
               theme,
-              child: Column(
-                children: [
-                  DropdownButtonFormField<String>(
-                    initialValue: _country,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Country ⭐',
-                      border: InputBorder.none,
-                    ),
-                    items: [
-                      const DropdownMenuItem<String>(
-                        value: null,
-                        child: Text('Not set'),
-                      ),
-                      ...ProfileOptions.countries.map(
-                        (c) => DropdownMenuItem<String>(value: c, child: Text(c)),
-                      ),
-                    ],
-                    onChanged: (v) => setState(() => _country = v),
-                  ),
-                  const Divider(height: 1),
-                  _field(_state, 'State / region'),
-                  const Divider(height: 1),
-                  _field(_city, 'City'),
-                ],
-              ),
+              icon: Icons.school_rounded,
+              title: 'Education',
+              children: [
+                _input(_university, 'University',
+                    icon: Icons.account_balance_rounded),
+                const SizedBox(height: 12),
+                _input(_college, 'College', icon: Icons.apartment_rounded),
+                const SizedBox(height: 12),
+                _input(_degree, 'Degree (e.g. MBA, B.Tech)',
+                    icon: Icons.workspace_premium_rounded),
+                const SizedBox(height: 12),
+                _input(_department, 'Department / branch',
+                    icon: Icons.category_rounded),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                        child: _input(_academicYear, 'Year', number: true)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        child: _input(_semester, 'Semester', number: true)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                        child: _input(_graduationYear, 'Grad. year',
+                            number: true)),
+                  ],
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            _section(theme, 'Education'),
-            _card(
+            const SizedBox(height: 14),
+            _sectionCard(
               theme,
-              child: Column(
-                children: [
-                  _field(_university, 'University'),
-                  const Divider(height: 1),
-                  _field(_college, 'College'),
-                  const Divider(height: 1),
-                  _field(_degree, 'Degree (e.g. MBA, B.Tech)'),
-                  const Divider(height: 1),
-                  _field(_department, 'Department / branch'),
-                  const Divider(height: 1),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _field(_academicYear, 'Year', number: true),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _field(_semester, 'Semester', number: true),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child:
-                            _field(_graduationYear, 'Grad. year', number: true),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+              icon: Icons.flag_rounded,
+              title: 'Career goal',
+              subtitle: 'Pick the one that fits you best',
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final g in ProfileOptions.careerGoals)
+                      _selectChip(g, _careerGoal == g,
+                          () => setState(() =>
+                              _careerGoal = _careerGoal == g ? null : g)),
+                  ],
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            _section(theme, 'Career goal'),
-            _card(
+            const SizedBox(height: 14),
+            _sectionCard(
               theme,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  for (final g in ProfileOptions.careerGoals)
-                    ChoiceChip(
-                      label: Text(g),
-                      selected: _careerGoal == g,
-                      onSelected: (sel) =>
-                          setState(() => _careerGoal = sel ? g : null),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            _section(theme, 'Interests'),
-            _card(
-              theme,
-              child: Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                children: [
-                  for (final i in ProfileOptions.interests)
-                    FilterChip(
-                      label: Text(i),
-                      selected: _interests.contains(i),
-                      onSelected: (sel) => setState(() {
-                        if (sel) {
-                          _interests.add(i);
-                        } else {
-                          _interests.remove(i);
-                        }
-                      }),
-                    ),
-                ],
-              ),
+              icon: Icons.interests_rounded,
+              title: 'Interests',
+              subtitle: 'Select all that apply',
+              children: [
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final i in ProfileOptions.interests)
+                      _selectChip(i, _interests.contains(i), () => setState(() {
+                            if (!_interests.remove(i)) _interests.add(i);
+                          })),
+                  ],
+                ),
+              ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// A gradient identity preview at the top of the form.
+  Widget _headerPreview(ThemeData theme, String? email) {
+    final name = _name.text.trim();
+    final initial = (name.isNotEmpty ? name[0] : '?').toUpperCase();
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppColors.primaryLight, AppColors.primary],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: AppColors.softShadow(opacity: 0.24, blur: 22),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.22),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(initial,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800)),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name.isEmpty ? 'Your name' : name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleLarge
+                        ?.copyWith(color: Colors.white)),
+                if (email != null && email.isNotEmpty)
+                  Text(email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: Colors.white70)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Pinned Cancel + Save bar so the primary action is always reachable.
+  Widget _saveBar(ThemeData theme) {
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        border: Border(top: BorderSide(color: theme.dividerColor, width: 1)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed:
+                      _saving ? null : () => Navigator.of(context).maybePop(),
+                  style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(50)),
+                  child: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 2,
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      minimumSize: const Size.fromHeight(50)),
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.check_rounded),
+                  label: Text(_saving ? 'Saving…' : 'Save profile'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Widget _intro(ThemeData theme) => Container(
-        padding: const EdgeInsets.all(16),
-        decoration: softCard(context),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(16),
+        ),
         child: Row(
           children: [
-            const Icon(Icons.auto_awesome_rounded, color: AppColors.primary),
+            const Icon(Icons.auto_awesome_rounded,
+                color: AppColors.primary, size: 20),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                'All optional. The more you share, the better we can match '
-                'scholarships, internships and student deals to you.',
-                style: theme.textTheme.bodySmall,
+                'Everything is optional. The more you share, the better we match '
+                'scholarships, internships and student perks to you.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: AppColors.inkSoft, height: 1.35),
               ),
             ),
           ],
         ),
       );
 
-  Widget _field(TextEditingController c, String label, {bool number = false}) {
+  /// A titled section wrapped in a soft card with an icon header.
+  Widget _sectionCard(
+    ThemeData theme, {
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required List<Widget> children,
+  }) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: softCard(context, radius: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: Icon(icon, size: 18, color: AppColors.primary),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: theme.textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    if (subtitle != null)
+                      Text(subtitle,
+                          style: theme.textTheme.bodySmall
+                              ?.copyWith(color: theme.hintColor)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ...children,
+        ],
+      ),
+    );
+  }
+
+  InputDecoration _decoration(ThemeData theme, String label, {IconData? icon}) {
+    final fill = theme.brightness == Brightness.dark
+        ? AppColors.darkSurfaceAlt
+        : AppColors.lavenderSoft;
+    return InputDecoration(
+      labelText: label,
+      filled: true,
+      fillColor: fill,
+      prefixIcon: icon == null
+          ? null
+          : Icon(icon, size: 19, color: theme.hintColor),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide.none,
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: AppColors.primary, width: 1.5),
+      ),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 15),
+    );
+  }
+
+  Widget _input(TextEditingController c, String label,
+      {bool number = false,
+      bool capitalize = false,
+      IconData? icon,
+      String? Function(String?)? validator}) {
+    final theme = Theme.of(context);
     return TextFormField(
       controller: c,
       keyboardType: number ? TextInputType.number : TextInputType.text,
       inputFormatters:
           number ? [FilteringTextInputFormatter.digitsOnly] : null,
-      textCapitalization:
-          number ? TextCapitalization.none : TextCapitalization.words,
-      decoration: InputDecoration(labelText: label, border: InputBorder.none),
+      textCapitalization: (capitalize && !number)
+          ? TextCapitalization.words
+          : TextCapitalization.none,
+      // Refresh the header preview initial/name as the user types.
+      onChanged: c == _name ? (_) => setState(() {}) : null,
+      decoration: _decoration(theme, label, icon: icon),
+      validator: validator,
     );
   }
 
-  Widget _section(ThemeData theme, String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(6, 4, 6, 8),
-        child: Text(
-          text.toUpperCase(),
-          style: theme.textTheme.labelMedium
-              ?.copyWith(letterSpacing: 1.0, color: theme.hintColor),
+  /// A selectable pill that stays visible on any background. Filled primary
+  /// when selected.
+  Widget _selectChip(String label, bool selected, VoidCallback onTap) {
+    final theme = Theme.of(context);
+    return Material(
+      color: selected
+          ? AppColors.primary
+          : (theme.brightness == Brightness.dark
+              ? AppColors.darkSurfaceAlt
+              : AppColors.lavenderSoft),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(24),
+        side: BorderSide(
+            color: selected ? AppColors.primary : Colors.transparent,
+            width: 1.2),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (selected) ...[
+                const Icon(Icons.check_rounded, size: 15, color: Colors.white),
+                const SizedBox(width: 6),
+              ],
+              Text(label,
+                  style: theme.textTheme.labelLarge?.copyWith(
+                      color: selected
+                          ? Colors.white
+                          : theme.textTheme.bodyLarge?.color,
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
         ),
-      );
-
-  Widget _card(ThemeData theme, {required Widget child}) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        decoration: softCard(context),
-        child: child,
-      );
+      ),
+    );
+  }
 }

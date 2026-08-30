@@ -122,6 +122,30 @@ class _CmsNotificationsScreenState
                     ),
                   ),
                   const SizedBox(height: 16),
+                  Builder(builder: (context) {
+                    final counts =
+                        ref.watch(audienceCountsProvider).valueOrNull;
+                    final est = counts?.estimate(country: _country);
+                    return Row(
+                      children: [
+                        const Icon(Icons.groups_rounded,
+                            size: 16, color: AppColors.info),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            est == null
+                                ? 'Estimated recipients: …'
+                                : _country == null
+                                    ? 'Estimated recipients: ~$est (everyone)'
+                                    : 'Estimated recipients: ~$est in $_country',
+                            style: theme.textTheme.bodySmall
+                                ?.copyWith(color: theme.hintColor),
+                          ),
+                        ),
+                      ],
+                    );
+                  }),
+                  const SizedBox(height: 16),
                   FilledButton.icon(
                     style: FilledButton.styleFrom(
                         backgroundColor: AppColors.primary,

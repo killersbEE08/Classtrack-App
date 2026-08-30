@@ -6,6 +6,7 @@ class AuditLogEntry {
   final String id;
   final String actorUid;
   final String actorRole;
+  final String? actorEmail;
   final String action;
   final String targetType;
   final String targetId;
@@ -16,6 +17,7 @@ class AuditLogEntry {
     required this.id,
     required this.actorUid,
     required this.actorRole,
+    this.actorEmail,
     required this.action,
     required this.targetType,
     required this.targetId,
@@ -28,6 +30,7 @@ class AuditLogEntry {
       id: id,
       actorUid: (m['actorUid'] as String?) ?? 'unknown',
       actorRole: (m['actorRole'] as String?) ?? 'none',
+      actorEmail: m['actorEmail'] as String?,
       action: (m['action'] as String?) ?? 'unknown',
       targetType: (m['targetType'] as String?) ?? '',
       targetId: (m['targetId'] as String?) ?? '',

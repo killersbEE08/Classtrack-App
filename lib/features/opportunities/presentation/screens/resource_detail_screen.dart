@@ -6,7 +6,11 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../core/utils/url_launcher_util.dart';
 import '../../../../services/analytics_service.dart';
+import '../../../../services/metrics_service.dart';
 import '../../../../shared/widgets/ui_kit.dart';
+import '../../../cms/domain/content_report.dart';
+import '../../../cms/presentation/providers/report_providers.dart';
+import '../../data/resource_repository.dart';
 import '../../domain/resource.dart';
 import '../../domain/resource_status.dart';
 import '../providers/opportunities_providers.dart';
@@ -34,9 +38,13 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
       r.type.isDiscount ? 'discount_viewed' : 'opportunity_viewed',
       {'id': r.id, 'type': r.type.key},
     );
+    ref.read(metricsServiceProvider).record(
+        resourceId: r.id, event: 'view', type: r.type.key, title: r.title);
   }
 
   Future<void> _open() async {
+    // Safety net: never open the link while the resource is "Opening soon".
+    if (r.effectiveStatus == ResourceStatus.openingSoon) return;
     final url = r.type.isDiscount
         ? (r.affiliateUrl ?? r.applicationUrl)
         : (r.applicationUrl ?? r.affiliateUrl);
@@ -49,6 +57,11 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
           .read(analyticsProvider)
           .log('opportunity_applied', {'id': r.id, 'type': r.type.key});
     }
+    final m = ref.read(metricsServiceProvider);
+    m.record(resourceId: r.id, event: 'click', type: r.type.key, title: r.title);
+    if (!r.type.isDiscount) {
+      m.record(resourceId: r.id, event: 'apply', type: r.type.key, title: r.title);
+    }
     await openUrl(context, url);
   }
 
@@ -58,10 +71,66 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
       {'id': r.id, 'type': r.type.key},
     );
     final link = r.applicationUrl ?? r.affiliateUrl ?? '';
+    ref.read(metricsServiceProvider).record(
+        resourceId: r.id, event: 'share', type: r.type.key, title: r.title);
     await Share.share(
       '${r.title} — ${r.brandName}\n$link',
       subject: r.title,
     );
+  }
+
+  /// Lets a student flag a problem with this resource. Opens a reason sheet and
+  /// files a report to the moderation queue.
+  Future<void> _report() async {
+    final reason = await showModalBottomSheet<ReportReason>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: Text('Report an issue',
+                    style: theme.textTheme.titleLarge),
+              ),
+              for (final reason in ReportReason.values)
+                ListTile(
+                  title: Text(reason.label),
+                  onTap: () => Navigator.pop(ctx, reason),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (reason == null || !mounted) return;
+
+    final repo = ref.read(reportRepositoryProvider);
+    final messenger = ScaffoldMessenger.of(context);
+    if (repo == null) {
+      messenger.showSnackBar(
+          const SnackBar(content: Text('Sign in to report content.')));
+      return;
+    }
+    try {
+      await repo.create(
+        resourceId: r.id,
+        resourceTitle: r.title,
+        reason: reason,
+      );
+      ref.read(analyticsProvider).log(
+          'resource_reported', {'id': r.id, 'reason': reason.key});
+      messenger.showSnackBar(const SnackBar(
+          content: Text('Thanks — reported. Our team will review it.')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(
+          content: Text("Couldn't submit your report. Try again.")));
+    }
   }
 
   @override
@@ -90,12 +159,24 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
               ref
                   .read(analyticsProvider)
                   .log('opportunity_saved', {'id': r.id, 'type': r.type.key});
+              if (!saved.contains(r.id)) {
+                ref.read(metricsServiceProvider).record(
+                    resourceId: r.id,
+                    event: 'save',
+                    type: r.type.key,
+                    title: r.title);
+              }
             },
           ),
           IconButton(
             icon: const Icon(Icons.ios_share_rounded),
             tooltip: 'Share',
             onPressed: _share,
+          ),
+          IconButton(
+            icon: const Icon(Icons.flag_outlined),
+            tooltip: 'Report an issue',
+            onPressed: _report,
           ),
         ],
       ),
@@ -105,7 +186,7 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ResourceThumb(resource: r, size: 64),
+              ResourceThumb(resource: r, size: 64, preferLogo: true),
               const SizedBox(width: 14),
               Expanded(
                 child: Column(
@@ -159,10 +240,22 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
             _section(theme, 'About'),
             Text(r.description, style: theme.textTheme.bodyMedium),
           ],
+          if (!isDiscount && r.benefits != null && r.benefits!.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _section(theme, 'Benefits'),
+            Text(r.benefits!, style: theme.textTheme.bodyMedium),
+          ],
           if (r.eligibility != null && r.eligibility!.isNotEmpty) ...[
             const SizedBox(height: 16),
             _section(theme, 'Eligibility'),
             Text(r.eligibility!, style: theme.textTheme.bodyMedium),
+          ],
+          if (!isDiscount &&
+              r.howToApply != null &&
+              r.howToApply!.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            _section(theme, 'How to apply'),
+            Text(r.howToApply!, style: theme.textTheme.bodyMedium),
           ],
           if (isDiscount &&
               r.redemptionInstructions != null &&
@@ -233,19 +326,18 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
   }
 
   Widget _bottomBar(BuildContext context, ResourceStatus status) {
-    final canAct = status.isOpen ||
-        status == ResourceStatus.openingSoon ||
-        r.type.isDiscount;
-    final label = r.type.isDiscount
-        ? 'Get deal'
-        : (status == ResourceStatus.openingSoon ? 'View details' : 'Apply now');
+    // "Opening soon" is not yet available — the CTA is disabled and the link
+    // must not open, for discounts and opportunities alike.
+    final comingSoon = status == ResourceStatus.openingSoon;
+    final canAct = !comingSoon && (status.isOpen || r.type.isDiscount);
+    final label = r.type.isDiscount ? 'Redeem perk' : 'Apply now';
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
         child: FilledButton.icon(
           onPressed: canAct ? _open : null,
           icon: Icon(r.type.isDiscount
-              ? Icons.local_offer_rounded
+              ? Icons.redeem_rounded
               : Icons.open_in_new_rounded),
           label: Text(canAct ? label : status.label),
           style: FilledButton.styleFrom(
@@ -326,10 +418,6 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
   /// "no dead ends" behaviour when an opportunity expires/discontinues.
   List<Resource> _related(WidgetRef ref) {
     final all = ref.watch(visibleResourcesProvider).valueOrNull ?? const [];
-    return all
-        .where((x) =>
-            x.id != r.id && x.type == r.type && x.isInActiveFeed)
-        .take(4)
-        .toList();
+    return ResourceQueries.related(r, all);
   }
 }

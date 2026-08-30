@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:classtrack/core/theme/app_icons.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -16,9 +16,9 @@ import '../../../exams/domain/exam.dart';
 import '../../../exams/presentation/providers/exam_providers.dart';
 import '../../../exams/presentation/screens/exams_screen.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
-import '../../../tasks/domain/task_item.dart';
 import '../../../tasks/presentation/providers/task_providers.dart';
 import '../../../tasks/presentation/screens/tasks_screen.dart';
+import '../../../tasks/presentation/widgets/task_timeline_tile.dart';
 import '../providers/schedule_providers.dart';
 import 'edit_session_screen.dart';
 
@@ -42,71 +42,221 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
     );
   }
 
+  /// Current attendance status for one class occurrence (this subject, on
+  /// [date], at the session's start-time slot). Returns [AttendanceStatus.unmarked]
+  /// when nothing has been marked for that specific occurrence yet. Watched via
+  /// [ref] so the sheet rebuilds the moment a mark is added/changed/cleared.
+  AttendanceStatus _occurrenceStatus(
+      WidgetRef ref, ScheduledClass c, DateTime date) {
+    final dateId = DateUtilsX.dateId(date);
+    final slot = c.session.startTime;
+    final records = ref.watch(dedupedAttendanceForSubjectProvider(c.subject.id));
+    for (final r in records) {
+      if (r.dateId == dateId &&
+          r.slot == slot &&
+          r.status != AttendanceStatus.unmarked) {
+        return r.status;
+      }
+    }
+    return AttendanceStatus.unmarked;
+  }
+
   void _showClassSheet(ScheduledClass c, DateTime date) {
     showModalBottomSheet(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
-        final theme = Theme.of(ctx);
-        final color = Color(c.subject.colorHex);
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(width: 10, height: 10,
-                      decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(c.subject.name,
-                        style: theme.textTheme.titleLarge),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '${DateUtilsX.displayTime(ctx, c.session.startTime)} – ${DateUtilsX.displayTime(ctx, c.session.endTime)}'
-                '${c.session.room?.isNotEmpty == true ? '  ·  ${c.session.room}' : ''}',
-                style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 18),
-              Text('Mark attendance', style: theme.textTheme.labelLarge),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  for (final s in [
-                    AttendanceStatus.present,
-                    AttendanceStatus.absent,
-                    AttendanceStatus.cancelled,
-                  ]) ...[
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: s.color,
-                          side: BorderSide(color: s.color),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
+        // When an occurrence is already marked the sheet shows a compact
+        // "marked" view (status + Edit + Delete). Tapping Edit flips [editing]
+        // so the Present/Absent/Cancelled buttons reappear to change the mark.
+        bool editing = false;
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) => Consumer(
+            builder: (ctx, sheetRef, _) {
+              final theme = Theme.of(ctx);
+              final color = Color(c.subject.colorHex);
+              final status = _occurrenceStatus(sheetRef, c, date);
+              final isMarked = status != AttendanceStatus.unmarked;
+              final showMarkOptions = !isMarked || editing;
+
+              // Write a status for this specific occurrence (idempotent, so it
+              // matches Home/Progress and never double-counts). Passing
+              // [AttendanceStatus.unmarked] clears the mark.
+              void setStatus(AttendanceStatus s) {
+                HapticFeedback.selectionClick();
+                ref.read(attendanceControllerProvider).setForOccurrence(
+                    c.subject.id, date, c.session.startTime, s);
+                Navigator.pop(ctx);
+              }
+
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                                color: color, shape: BoxShape.circle)),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(c.subject.name,
+                              style: theme.textTheme.titleLarge),
                         ),
-                        onPressed: () {
-                          // Mark this specific class occurrence (per session),
-                          // idempotent so it matches Home/Progress and never
-                          // double-counts.
-                          ref.read(attendanceControllerProvider).setForOccurrence(
-                              c.subject.id, date, c.session.startTime, s);
-                          Navigator.pop(ctx);
-                        },
-                        icon: Icon(s.icon, size: 18),
-                        label: Text(s.label,
-                            style: const TextStyle(fontSize: 12)),
-                      ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${DateUtilsX.displayTime(ctx, c.session.startTime)} – ${DateUtilsX.displayTime(ctx, c.session.endTime)}'
+                      '${c.session.room?.isNotEmpty == true ? '  ·  ${c.session.room}' : ''}',
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                    const SizedBox(height: 18),
+                    if (isMarked && !editing) ...[
+                      // Already marked: show what was marked + Edit/Delete of
+                      // the mark (change it, or clear it).
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: status.color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(status.icon, color: status.color),
+                            const SizedBox(width: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Attendance',
+                                    style: theme.textTheme.bodySmall
+                                        ?.copyWith(color: theme.hintColor)),
+                                Text('Marked ${status.label}',
+                                    style: theme.textTheme.titleMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                            color: status.color)),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () =>
+                                  setSheetState(() => editing = true),
+                              icon: const Icon(Icons.edit_outlined, size: 18),
+                              label: const Text('Edit'),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: AppColors.danger,
+                                side:
+                                    const BorderSide(color: AppColors.danger),
+                              ),
+                              onPressed: () =>
+                                  setStatus(AttendanceStatus.unmarked),
+                              icon: const Icon(Icons.delete_outline_rounded,
+                                  size: 18),
+                              label: const Text('Delete'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    if (showMarkOptions) ...[
+                      Text(editing ? 'Change attendance' : 'Mark attendance',
+                          style: theme.textTheme.labelLarge),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          for (final s in [
+                            AttendanceStatus.present,
+                            AttendanceStatus.absent,
+                            AttendanceStatus.cancelled,
+                          ]) ...[
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: s.color,
+                                  side: BorderSide(color: s.color),
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 12),
+                                ),
+                                onPressed: () => setStatus(s),
+                                icon: Icon(s.icon, size: 18),
+                                label: Text(s.label,
+                                    style: const TextStyle(fontSize: 12)),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                        ],
+                      ),
+                      if (editing) ...[
+                        const SizedBox(height: 8),
+                        Center(
+                          child: TextButton(
+                            onPressed: () =>
+                                setSheetState(() => editing = false),
+                            child: const Text('Cancel'),
+                          ),
+                        ),
+                      ],
+                      // Class-level edit/delete stay available while the
+                      // occurrence is still unmarked.
+                      if (!isMarked) ...[
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: () {
+                                  Navigator.pop(ctx);
+                                  _editClass(c);
+                                },
+                                icon:
+                                    const Icon(Icons.edit_outlined, size: 18),
+                                label: const Text('Edit class'),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppColors.danger,
+                                  side: const BorderSide(
+                                      color: AppColors.danger),
+                                ),
+                                onPressed: () {
+                                  Navigator.pop(ctx);
+                                  _deleteClass(c);
+                                },
+                                icon: const Icon(Icons.delete_outline_rounded,
+                                    size: 18),
+                                label: const Text('Delete class'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
                   ],
-                ],
-              ),
-            ],
+                ),
+              );
+            },
           ),
         );
       },
@@ -237,19 +387,24 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
                     if (classes.isNotEmpty) ...[
                       _sectionLabel('Classes', AppColors.info),
                       for (var i = 0; i < classes.length; i++)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _classTile(classes[i], _selectedDay)
-                              .animate()
-                              .fadeIn(delay: (i * 60).ms, duration: 320.ms)
-                              .slideX(
-                                  begin: 0.08, curve: Curves.easeOutCubic),
-                        ),
+                        _dayClassTile(
+                            classes[i], i, classes.length, _selectedDay),
                       const SizedBox(height: 6),
                     ],
                     if (dueTasks.isNotEmpty) ...[
                       _sectionLabel('Tasks', AppColors.primary),
-                      for (final t in dueTasks) _taskTile(t),
+                      for (var i = 0; i < dueTasks.length; i++)
+                        TaskTimelineTile(
+                          task: dueTasks[i],
+                          isFirst: i == 0,
+                          isLast: i == dueTasks.length - 1,
+                          onTap: () => showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            builder: (_) =>
+                                TaskEditorSheet(task: dueTasks[i]),
+                          ),
+                        ),
                     ],
                   ],
                 ),
@@ -492,155 +647,190 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
           ],
           if (classes.isNotEmpty) ...[
             _sectionLabel('Classes', AppColors.info),
-            for (final c in classes) _monthEventCard(c),
+            for (var i = 0; i < classes.length; i++)
+              _dayClassTile(classes[i], i, classes.length, _selectedDay),
             const SizedBox(height: 6),
           ],
           if (tasks.isNotEmpty) ...[
             _sectionLabel('Tasks', AppColors.primary),
-            for (final t in tasks) _taskTile(t),
+            for (var i = 0; i < tasks.length; i++)
+              TaskTimelineTile(
+                task: tasks[i],
+                isFirst: i == 0,
+                isLast: i == tasks.length - 1,
+                onTap: () => showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) => TaskEditorSheet(task: tasks[i]),
+                ),
+              ),
           ],
         ],
       ],
     );
   }
 
-  /// Soft, subject-tinted agenda card (matches the calendar reference design).
-  Widget _monthEventCard(ScheduledClass c) {
-    final theme = Theme.of(context);
-    final color = Color(c.subject.colorHex);
-    final time =
-        '${DateUtilsX.displayTime(context, c.session.startTime)} – ${DateUtilsX.displayTime(context, c.session.endTime)}';
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Material(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _showClassSheet(c, _selectedDay),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(c.subject.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleMedium),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Icon(PhosphorIcons.clock(), size: 14, color: color),
-                          const SizedBox(width: 6),
-                          Text(time,
-                              style: theme.textTheme.bodySmall
-                                  ?.copyWith(color: color, fontWeight: FontWeight.w600)),
-                          if (c.session.room != null &&
-                              c.session.room!.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            Text('· ${c.session.room}',
-                                style: theme.textTheme.bodySmall),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  width: 34,
-                  height: 34,
-                  decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.9), shape: BoxShape.circle),
-                  child: const Icon(Icons.chevron_right_rounded,
-                      color: Colors.white, size: 20),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   // ---------------- shared tiles ----------------
-  Widget _classTile(ScheduledClass c, DateTime date) {
+  /// Timeline day tile: a colour-coded rail node + a subject-tinted card
+  /// (the class in progress fills solid with a live progress bar). Tapping
+  /// opens the class sheet to mark attendance, edit or delete.
+  Widget _dayClassTile(
+      ScheduledClass c, int index, int total, DateTime date) {
     final theme = Theme.of(context);
     final color = Color(c.subject.colorHex);
-    final hasRoom = c.session.room != null && c.session.room!.isNotEmpty;
+    final isToday = DateUtilsX.isSameDay(date, DateTime.now());
+    final nowMin = DateTime.now().hour * 60 + DateTime.now().minute;
+    final start = DateUtilsX.minutesOfDay(c.session.startTime);
+    final end = DateUtilsX.minutesOfDay(c.session.endTime);
+    final isNow = isToday && nowMin >= start && nowMin < end;
+    final isPast = isToday && nowMin >= end;
+    final room = (c.session.room != null && c.session.room!.isNotEmpty)
+        ? c.session.room
+        : c.subject.room;
+    final hasRoom = room != null && room.isNotEmpty;
+    final progress = (isNow && end > start)
+        ? ((nowMin - start) / (end - start)).clamp(0.0, 1.0)
+        : 0.0;
+    final minsLeft = isNow ? (end - nowMin) : 0;
+    final isFirst = index == 0;
+    final isLast = index == total - 1;
+    final lineColor = AppColors.primary.withValues(alpha: 0.25);
+    final cardColor = isNow ? color : color.withValues(alpha: 0.12);
+    final onCard = isNow ? Colors.white : theme.textTheme.titleLarge?.color;
+    final subColor =
+        isNow ? Colors.white.withValues(alpha: 0.85) : theme.hintColor;
+    final startText = DateUtilsX.displayTime(context, c.session.startTime);
+    final timeRange =
+        '${DateUtilsX.displayTime(context, c.session.startTime)} – ${DateUtilsX.displayTime(context, c.session.endTime)}';
 
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Time rail
+          // Left rail: connector line + subject-coloured node.
           SizedBox(
-            width: 66,
+            width: 22,
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Text(
-                  DateUtilsX.displayTime(context, c.session.startTime),
-                  style: theme.textTheme.labelLarge
-                      ?.copyWith(fontWeight: FontWeight.w700),
-                  textAlign: TextAlign.center,
+                Container(
+                    width: 2,
+                    height: 22,
+                    color: isFirst ? Colors.transparent : lineColor),
+                Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isNow ? color : theme.cardColor,
+                    border: Border.all(color: color, width: 3),
+                    boxShadow: isNow
+                        ? [
+                            BoxShadow(
+                                color: color.withValues(alpha: 0.5),
+                                blurRadius: 8,
+                                spreadRadius: 1)
+                          ]
+                        : null,
+                  ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  DateUtilsX.displayTime(context, c.session.endTime),
-                  style: theme.textTheme.bodySmall,
-                  textAlign: TextAlign.center,
+                Expanded(
+                  child: Container(
+                      width: 2,
+                      color: isLast ? Colors.transparent : lineColor),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 10),
-          Container(
-            width: 4,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
           const SizedBox(width: 12),
           Expanded(
-            child: Material(
-              color: color.withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(18),
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 14),
               clipBehavior: Clip.antiAlias,
-              child: InkWell(
-                onTap: () => _showClassSheet(c, date),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(c.subject.name,
-                                style: theme.textTheme.titleMedium,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis),
-                            if (hasRoom) ...[
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Icon(Icons.meeting_room_outlined,
-                                      size: 13, color: color),
-                                  const SizedBox(width: 5),
-                                  Text(c.session.room!,
-                                      style: theme.textTheme.bodySmall),
-                                ],
+              decoration: BoxDecoration(
+                color: cardColor,
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: (isNow && theme.brightness == Brightness.light)
+                    ? [
+                        BoxShadow(
+                            color: color.withValues(alpha: 0.35),
+                            blurRadius: 18,
+                            offset: const Offset(0, 8))
+                      ]
+                    : null,
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _showClassSheet(c, date),
+                  child: Opacity(
+                    opacity: isPast ? 0.7 : 1,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(c.subject.name,
+                                    style: theme.textTheme.titleMedium
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                            color: onCard),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
                               ),
+                              const SizedBox(width: 8),
+                              Text(startText,
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: onCard)),
                             ],
+                          ),
+                          if (isNow) ...[
+                            const SizedBox(height: 10),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: LinearProgressIndicator(
+                                value: progress,
+                                minHeight: 6,
+                                backgroundColor:
+                                    Colors.white.withValues(alpha: 0.3),
+                                valueColor: const AlwaysStoppedAnimation(
+                                    Colors.white),
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text('In progress · ${minsLeft}m left',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600)),
+                          ] else ...[
+                            const SizedBox(height: 5),
+                            Text(timeRange,
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(color: subColor)),
                           ],
-                        ),
+                          if (hasRoom) ...[
+                            const SizedBox(height: 5),
+                            Row(
+                              children: [
+                                Icon(Icons.meeting_room_outlined,
+                                    size: 14, color: subColor),
+                                const SizedBox(width: 5),
+                                Flexible(
+                                  child: Text(room,
+                                      style: theme.textTheme.bodySmall
+                                          ?.copyWith(color: subColor),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
                       ),
-                      Icon(Icons.chevron_right_rounded, color: color),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -649,6 +839,53 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
         ],
       ),
     );
+  }
+
+  /// Opens the class editor to modify this class (and its room).
+  void _editClass(ScheduledClass c) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) =>
+          EditSessionScreen(subjectId: c.subject.id, session: c.session),
+    ));
+  }
+
+  /// Deletes a class from the timetable after confirmation.
+  Future<void> _deleteClass(ScheduledClass c) async {
+    final repo = ref.read(sessionRepositoryProvider);
+    if (repo == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete this class?'),
+        content: Text(
+            'Remove "${c.subject.name}" from your timetable? This cannot be '
+            'undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await repo.delete(c.subject.id, c.session.id);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Class deleted')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Could not delete: $e')));
+      }
+    }
   }
 
   Widget _classTileStatic(ScheduledClass c) {
@@ -767,77 +1004,6 @@ class _ScheduleScreenState extends ConsumerState<ScheduleScreen> {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-
-  Widget _taskTile(TaskItem t) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: softCard(context),
-        child: Row(
-          children: [
-            GestureDetector(
-              onTap: () => ref.read(taskControllerProvider).toggle(t),
-              child: Container(
-                width: 26,
-                height: 26,
-                decoration: BoxDecoration(
-                  color: t.done ? AppColors.primary : Colors.transparent,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                      color:
-                          t.done ? AppColors.primary : theme.dividerColor,
-                      width: 2),
-                ),
-                child: t.done
-                    ? const Icon(Icons.check_rounded,
-                        size: 15, color: Colors.white)
-                    : null,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: InkWell(
-                onTap: () => showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  builder: (_) => TaskEditorSheet(task: t),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(t.title,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          decoration:
-                              t.done ? TextDecoration.lineThrough : null,
-                          color: t.done ? theme.hintColor : null,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis),
-                    Row(
-                      children: [
-                        Icon(t.type.icon, size: 12, color: t.type.color),
-                        const SizedBox(width: 5),
-                        Text(t.type.label, style: theme.textTheme.bodySmall),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            Container(
-              width: 4,
-              height: 32,
-              decoration: BoxDecoration(
-                  color: t.priority.color,
-                  borderRadius: BorderRadius.circular(4)),
-            ),
-          ],
         ),
       ),
     );

@@ -8,7 +8,7 @@ void main() {
       for (final p in Placements.all) {
         expect(Placements.label(p), isNotEmpty);
       }
-      expect(Placements.label('home'), 'Home');
+      expect(Placements.label('home'), 'Home — bottom');
       expect(Placements.label('featured'), 'Featured card');
     });
   });

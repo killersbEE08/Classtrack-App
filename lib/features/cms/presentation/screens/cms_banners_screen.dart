@@ -23,10 +23,15 @@ class CmsBannersScreen extends ConsumerWidget {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(28, 24, 28, 12),
-          child: Row(
+          // Wrap (not Row+Spacer) so the action button drops below the title on
+          // narrow/mobile widths instead of overflowing off the right edge.
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 12,
             children: [
               Text('Banners', style: theme.textTheme.headlineSmall),
-              const Spacer(),
               FilledButton.icon(
                 style:
                     FilledButton.styleFrom(backgroundColor: AppColors.primary),
@@ -253,17 +258,12 @@ class _CmsBannerEditorScreenState extends ConsumerState<CmsBannerEditorScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.existing == null ? 'New banner' : 'Edit banner'),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 12),
-            child: FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: AppColors.primary),
-              onPressed: _saving ? null : _save,
-              icon: const Icon(Icons.save_rounded),
-              label: const Text('Save'),
-            ),
-          ),
-        ],
+      ),
+      bottomNavigationBar: CmsSaveBar(
+        saving: _saving,
+        isNew: widget.existing == null,
+        label: 'banner',
+        onSave: _saving ? null : _save,
       ),
       body: Center(
         child: ConstrainedBox(

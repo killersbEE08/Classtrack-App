@@ -3,24 +3,82 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../core/utils/validators.dart';
 
 /// Where a banner or campaign can be placed (PRD §11/§19).
+///
+/// Each key maps to a concrete slot in the app that renders a [PlacementBanner]
+/// and/or [PlacementCampaign]. Keys are the stable strings persisted in
+/// Firestore — never rename an existing key (only its [label]).
 class Placements {
   Placements._();
-  static const home = 'home';
+
+  // Home surfaces.
+  static const home = 'home'; // Home (bottom, near lifecycle banners)
+  static const homeTop = 'home_top';
+  static const homeAboveQuickTools = 'home_above_quick_tools';
+  static const homeBelowStats = 'home_below_stats';
+  static const homeBelowTimeline = 'home_below_timeline';
+  static const homeBelowTasks = 'home_below_tasks';
+
+  // Feature destinations.
   static const opportunities = 'opportunities';
   static const discounts = 'discounts';
+  static const attendance = 'attendance';
+  static const tasks = 'tasks';
+  static const grades = 'grades';
+  static const exams = 'exams';
+
+  // Generic / legacy slots.
   static const featured = 'featured';
   static const banner = 'banner';
 
-  static const all = <String>[home, opportunities, discounts, featured, banner];
+  /// Shown in the Home notification bell (in-app announcements), not on a page.
+  static const announcement = 'announcement';
+
+  static const all = <String>[
+    homeTop,
+    homeAboveQuickTools,
+    homeBelowStats,
+    homeBelowTimeline,
+    homeBelowTasks,
+    home,
+    attendance,
+    tasks,
+    grades,
+    exams,
+    opportunities,
+    discounts,
+    announcement,
+    featured,
+    banner,
+  ];
 
   static String label(String key) {
     switch (key) {
       case home:
-        return 'Home';
+        return 'Home — bottom';
+      case homeTop:
+        return 'Home — top';
+      case homeAboveQuickTools:
+        return 'Home — above quick tools';
+      case homeBelowStats:
+        return 'Home — below stats';
+      case homeBelowTimeline:
+        return 'Home — below timeline';
+      case homeBelowTasks:
+        return 'Home — below tasks';
       case opportunities:
         return 'Opportunities';
       case discounts:
-        return 'Discounts';
+        return 'Perks';
+      case attendance:
+        return 'Attendance';
+      case tasks:
+        return 'Tasks';
+      case grades:
+        return 'Grades';
+      case exams:
+        return 'Exams';
+      case announcement:
+        return 'Announcement (bell)';
       case featured:
         return 'Featured card';
       case banner:

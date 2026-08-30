@@ -31,9 +31,19 @@ class ProFeatures {
       'Import as many timetables as you like — snap a photo, upload a PDF or paste text and let AI build your schedule. (New students get one free scan during first-time setup, before adding any subjects.)',
     ),
     ProFeature(
+      Icons.auto_awesome_motion_rounded,
+      'AI weekly planner',
+      'A smart study & revision plan built from your exams, deadlines and free timetable slots — regenerate any time.',
+    ),
+    ProFeature(
       Icons.insights_rounded,
       'Insights & predictions',
       'Attendance forecasts, safe-skip counts, spending projections and grade trends.',
+    ),
+    ProFeature(
+      Icons.sync_rounded,
+      'Two-way Google Calendar sync',
+      'Auto-import your calendar & tasks every day, and push your classes, exams and deadlines back into Google Calendar.',
     ),
     ProFeature(
       Icons.shield_moon_rounded,

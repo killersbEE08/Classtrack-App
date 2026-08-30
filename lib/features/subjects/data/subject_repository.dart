@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/subject.dart';
 
 /// CRUD for users/{uid}/subjects.
@@ -18,9 +19,8 @@ class SubjectRepository {
 
   Stream<List<Subject>> watchSubjects() {
     return _col.orderBy('name').snapshots().map(
-          (snap) => snap.docs
-              .map((d) => Subject.fromMap(d.id, d.data()))
-              .toList(),
+          (snap) =>
+              parseDocsSafely(snap.docs, Subject.fromMap, context: 'subjects'),
         );
   }
 
@@ -39,7 +39,7 @@ class SubjectRepository {
   /// instead of creating duplicates on re-import).
   Future<List<Subject>> getAll() async {
     final snap = await _col.get();
-    return snap.docs.map((d) => Subject.fromMap(d.id, d.data())).toList();
+    return parseDocsSafely(snap.docs, Subject.fromMap, context: 'subjects');
   }
 
   /// Create with a known id (used by AI import batch writes).
@@ -106,13 +106,40 @@ class SubjectRepository {
     }
   }
 
-  /// Directly set the counters (from the manual edit dialog).
+  /// Directly set the counters (from the manual "tune" edit dialog).
+  ///
+  /// DRIFT GUARD: the subject counters drive the attendance percentage while
+  /// the dated attendance records drive the calendar. If the manual editor
+  /// wrote an absolute total BELOW what the dated records already contribute,
+  /// the two sources would contradict each other (e.g. "2 present" overall but
+  /// 5 days marked present on the calendar). We therefore clamp each counter to
+  /// its dated-records contribution ([minAttended]/[minAbsent]/[minCancelled],
+  /// passed in by the caller which has the deduped records) so the stored total
+  /// is ALWAYS >= the sum of dated marks — the two views can never drift apart.
+  /// The portion above the dated contribution is persisted as an explicit
+  /// `manual*` baseline (classes not tracked day-by-day) for transparency.
   Future<void> setAttendance(String id, int attended, int absent,
-      {int? cancelled}) {
-    final a = attended < 0 ? 0 : attended;
-    final b = absent < 0 ? 0 : absent;
-    final map = <String, dynamic>{'attended': a, 'absent': b, 'held': a + b};
-    if (cancelled != null) map['cancelled'] = cancelled < 0 ? 0 : cancelled;
+      {int? cancelled,
+      int minAttended = 0,
+      int minAbsent = 0,
+      int minCancelled = 0}) {
+    final floorA = minAttended < 0 ? 0 : minAttended;
+    final floorB = minAbsent < 0 ? 0 : minAbsent;
+    final a = attended < floorA ? floorA : attended;
+    final b = absent < floorB ? floorB : absent;
+    final map = <String, dynamic>{
+      'attended': a,
+      'absent': b,
+      'held': a + b,
+      'manualAttended': a - floorA,
+      'manualAbsent': b - floorB,
+    };
+    if (cancelled != null) {
+      final floorC = minCancelled < 0 ? 0 : minCancelled;
+      final c = cancelled < floorC ? floorC : cancelled;
+      map['cancelled'] = c;
+      map['manualCancelled'] = c - floorC;
+    }
     return _col.doc(id).set(map, SetOptions(merge: true));
   }
 

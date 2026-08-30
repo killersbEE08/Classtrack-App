@@ -10,7 +10,7 @@ import '../../../core/theme/app_colors.dart';
 enum ResourceType {
   scholarship('scholarship', 'Scholarship', Icons.school_rounded),
   internship('internship', 'Internship', Icons.work_outline_rounded),
-  discount('discount', 'Student discount', Icons.local_offer_rounded),
+  discount('discount', 'Student discount', Icons.redeem_rounded),
   hackathon('hackathon', 'Hackathon', Icons.code_rounded),
   competition('competition', 'Competition', Icons.emoji_events_rounded),
   ambassador('ambassador', 'Ambassador program', Icons.campaign_rounded),

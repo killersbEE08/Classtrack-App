@@ -27,7 +27,7 @@ class ProConstants {
   ///   flutter run --dart-define=REVENUECAT_ANDROID_KEY=goog_xxx
   static const String _androidApiKey = String.fromEnvironment(
     'REVENUECAT_ANDROID_KEY',
-    defaultValue: '',
+    defaultValue: 'goog_eGHVsrMqbOpsYrtNTrUQUKtOSab',
   );
   static const String _iosApiKey = String.fromEnvironment(
     'REVENUECAT_IOS_KEY',

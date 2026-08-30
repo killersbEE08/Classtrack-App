@@ -1,20 +1,27 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:classtrack/core/theme/app_icons.dart';
 
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
+import '../../../../core/utils/date_utils.dart';
 import '../../../../shared/widgets/states.dart';
+import '../../../../shared/widgets/skeleton.dart';
 import '../../../../shared/widgets/ui_kit.dart';
 import '../../../../shared/widgets/progress_ring.dart';
+import '../../../../shared/widgets/placement_slot.dart';
+import '../../../cms/domain/marketing.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../import/presentation/screens/import_screen.dart';
+import '../../../schedule/presentation/providers/schedule_providers.dart';
 import '../../../subjects/domain/subject.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../../subjects/presentation/screens/edit_subject_screen.dart';
 import '../../../subjects/presentation/screens/subject_detail_screen.dart';
 import '../../domain/attendance_record.dart';
 import '../providers/attendance_providers.dart';
+import '../widgets/attendance_calendar.dart';
 
 /// Attendance overview: an overall hero ring plus a per-subject breakdown with
 /// quick present/absent/cancelled marking and a manual counts editor.
@@ -44,6 +51,7 @@ class AttendanceScreen extends ConsumerWidget {
                   if (canPop) ...[
                     RoundIconButton(
                       icon: Icons.arrow_back_rounded,
+                      semanticLabel: 'Back',
                       onTap: () => Navigator.of(context).pop(),
                     ),
                     const SizedBox(width: 12),
@@ -54,6 +62,7 @@ class AttendanceScreen extends ConsumerWidget {
                     icon: Icons.add_rounded,
                     background: AppColors.primary,
                     iconColor: Colors.white,
+                    semanticLabel: 'Add subject',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(
                           builder: (_) => const EditSubjectScreen()),
@@ -64,8 +73,10 @@ class AttendanceScreen extends ConsumerWidget {
             ),
             Expanded(
               child: subjectsAsync.when(
-                loading: () => const LoadingView(),
-                error: (e, _) => ErrorView(error: e),
+                loading: () => const SkeletonList(showTrailing: true),
+                error: (e, _) => ErrorView(
+                    error: e,
+                    onRetry: () => ref.invalidate(subjectsStreamProvider)),
                 data: (subjects) {
                   if (subjects.isEmpty) {
                     return const _NoSubjectsView();
@@ -77,7 +88,9 @@ class AttendanceScreen extends ConsumerWidget {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
                     children: [
                       _OverallCard(overall: overall, target: target),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 16),
+                      const PlacementSlot(placement: Placements.attendance),
+                      const SizedBox(height: 6),
                       const Padding(
                         padding: EdgeInsets.symmetric(horizontal: 4),
                         child: SectionHeader(title: 'By subject'),
@@ -86,6 +99,8 @@ class AttendanceScreen extends ConsumerWidget {
                       ...subjects.map(
                         (s) => _SubjectAttendanceCard(subject: s, target: target),
                       ),
+                      const SizedBox(height: 8),
+                      const AttendanceCalendar(),
                     ],
                   );
                 },
@@ -292,6 +307,23 @@ class _SubjectAttendanceCard extends ConsumerWidget {
                         '${subject.attended} attended · ${subject.missed} missed · ${subject.held} total',
                         style: theme.textTheme.bodySmall,
                       ),
+                      if (subject.room != null &&
+                          subject.room!.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Row(
+                          children: [
+                            Icon(Icons.meeting_room_outlined,
+                                size: 13, color: theme.hintColor),
+                            const SizedBox(width: 4),
+                            Flexible(
+                              child: Text(subject.room!,
+                                  style: theme.textTheme.bodySmall,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -326,21 +358,17 @@ class _SubjectAttendanceCard extends ConsumerWidget {
             children: [
               _ActionButton(
                 status: AttendanceStatus.present,
-                onTap: () =>
-                    ref.read(attendanceControllerProvider).markPresent(subject.id),
+                onTap: () => _markNow(ref, AttendanceStatus.present),
               ),
               const SizedBox(width: 8),
               _ActionButton(
                 status: AttendanceStatus.absent,
-                onTap: () =>
-                    ref.read(attendanceControllerProvider).markAbsent(subject.id),
+                onTap: () => _markNow(ref, AttendanceStatus.absent),
               ),
               const SizedBox(width: 8),
               _ActionButton(
                 status: AttendanceStatus.cancelled,
-                onTap: () => ref
-                    .read(attendanceControllerProvider)
-                    .markCancelled(subject.id),
+                onTap: () => _markNow(ref, AttendanceStatus.cancelled),
               ),
               const SizedBox(width: 8),
               // Manual counts editor.
@@ -406,6 +434,50 @@ class _SubjectAttendanceCard extends ConsumerWidget {
     );
   }
 
+  /// Records a quick mark as a dated occurrence for *today*, keyed by the
+  /// class's session start time — the SAME per-occurrence key the home timeline
+  /// and subject screen use — so marking here also flips the matching timeline
+  /// tile and never double-counts. When the subject has no class scheduled
+  /// today (an ad-hoc extra class) we fall back to a unique per-tap time slot so
+  /// repeated quick marks each still count. Bulk/historical edits use the manual
+  /// counts editor (tune icon).
+  void _markNow(WidgetRef ref, AttendanceStatus status) {
+    // Tactile confirmation for the core daily action — a crisp selection tick
+    // makes marking feel registered and reinforces the habit loop.
+    HapticFeedback.selectionClick();
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final todayId = DateUtilsX.dateId(today);
+    final controller = ref.read(attendanceControllerProvider);
+
+    final todaySlots = ref
+        .read(sessionsForSubjectProvider(subject.id))
+        .valueOrNull
+        ?.where((s) => s.occursOn(today))
+        .map((s) => s.startTime)
+        .toList()
+      ?..sort();
+
+    if (todaySlots == null || todaySlots.isEmpty) {
+      // No scheduled class today — record an ad-hoc occurrence with a unique
+      // per-tap slot so several quick marks in a row each count.
+      String two(int n) => n.toString().padLeft(2, '0');
+      final slot = '${two(now.hour)}:${two(now.minute)}:${two(now.second)}';
+      controller.setForOccurrence(subject.id, now, slot, status);
+      return;
+    }
+
+    // Mark the next unmarked scheduled occurrence using its session start time.
+    final records =
+        ref.read(dedupedAttendanceForSubjectProvider(subject.id));
+    final markedSlots = <String>{
+      for (final r in records)
+        if (r.dateId == todayId && r.slot.isNotEmpty) r.slot,
+    };
+    final slot = nextAttendanceSlot(todaySlots, markedSlots);
+    controller.setForOccurrence(subject.id, now, slot, status);
+  }
+
   Future<void> _openEditor(BuildContext context, WidgetRef ref) async {
     final result = await showModalBottomSheet<({int attended, int total})>(
       context: context,
@@ -418,11 +490,25 @@ class _SubjectAttendanceCard extends ConsumerWidget {
       builder: (_) => _EditAttendanceSheet(subject: subject),
     );
     if (result != null) {
+      // Count what the dated attendance records already contribute so the
+      // manual total can never be set below the calendar (drift guard — see
+      // SubjectRepository.setAttendance).
+      final records = ref.read(dedupedAttendanceForSubjectProvider(subject.id));
+      var dPresent = 0, dAbsent = 0;
+      for (final r in records) {
+        if (r.status == AttendanceStatus.present) {
+          dPresent++;
+        } else if (r.status == AttendanceStatus.absent) {
+          dAbsent++;
+        }
+      }
       // setCounts expects (attended, ABSENT); convert the collected total.
       ref.read(attendanceControllerProvider).setCounts(
             subject.id,
             result.attended,
             result.total - result.attended,
+            minAttended: dPresent,
+            minAbsent: dAbsent,
           );
     }
   }

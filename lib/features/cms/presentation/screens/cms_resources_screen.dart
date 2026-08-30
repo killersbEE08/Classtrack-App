@@ -26,6 +26,10 @@ class _CmsResourcesScreenState extends ConsumerState<CmsResourcesScreen> {
   ResourceStatus? _status;
   ResourceType? _type;
 
+  /// Multi-select (bulk actions) state.
+  bool _selectionMode = false;
+  final Set<String> _selected = {};
+
   bool _matches(Resource r) {
     if (_status != null && r.status != _status) return false;
     if (_type != null && r.type != _type) return false;
@@ -47,17 +51,38 @@ class _CmsResourcesScreenState extends ConsumerState<CmsResourcesScreen> {
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(28, 24, 28, 8),
-          child: Row(
+          // Wrap (not Row+Spacer) so the action button drops below the title on
+          // narrow/mobile widths instead of overflowing off the right edge.
+          child: Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 12,
             children: [
               Text('Resources', style: theme.textTheme.headlineSmall),
-              const Spacer(),
               if (canEdit)
-                FilledButton.icon(
-                  style:
-                      FilledButton.styleFrom(backgroundColor: AppColors.primary),
-                  onPressed: () => _openEditor(context, null),
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('New resource'),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => setState(() {
+                        _selectionMode = !_selectionMode;
+                        if (!_selectionMode) _selected.clear();
+                      }),
+                      icon: Icon(_selectionMode
+                          ? Icons.close_rounded
+                          : Icons.checklist_rounded),
+                      label: Text(_selectionMode ? 'Cancel' : 'Select'),
+                    ),
+                    FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.primary),
+                      onPressed: () => _openEditor(context, null),
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('New resource'),
+                    ),
+                  ],
                 ),
             ],
           ),
@@ -121,6 +146,9 @@ class _CmsResourcesScreenState extends ConsumerState<CmsResourcesScreen> {
                 itemBuilder: (_, i) => _ResourceRow(
                   resource: rows[i],
                   canEdit: canEdit,
+                  selectionMode: _selectionMode,
+                  selected: _selected.contains(rows[i].id),
+                  onToggle: () => _toggleSelected(rows[i].id),
                   onEdit: () => _openEditor(context, rows[i]),
                   onAction: (a) => _runAction(context, rows[i], a),
                 ),
@@ -128,8 +156,126 @@ class _CmsResourcesScreenState extends ConsumerState<CmsResourcesScreen> {
             },
           ),
         ),
+        if (_selectionMode && _selected.isNotEmpty) _bulkBar(context),
       ],
     );
+  }
+
+  void _toggleSelected(String id) => setState(() {
+        if (!_selected.remove(id)) _selected.add(id);
+      });
+
+  Widget _bulkBar(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        border: Border(top: BorderSide(color: theme.dividerColor, width: 1)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 12, 28, 12),
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              Text('${_selected.length} selected',
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700)),
+              FilledButton.icon(
+                style:
+                    FilledButton.styleFrom(backgroundColor: AppColors.success),
+                onPressed: () => _runBulk(context, _BulkAction.publish),
+                icon: const Icon(Icons.publish_rounded, size: 18),
+                label: const Text('Publish'),
+              ),
+              OutlinedButton.icon(
+                onPressed: () => _runBulk(context, _BulkAction.archive),
+                icon: const Icon(Icons.archive_outlined, size: 18),
+                label: const Text('Archive'),
+              ),
+              OutlinedButton.icon(
+                style:
+                    OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
+                onPressed: () => _runBulk(context, _BulkAction.delete),
+                icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                label: const Text('Delete'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _runBulk(BuildContext context, _BulkAction action) async {
+    final repo = ref.read(cmsResourceRepositoryProvider);
+    if (repo == null) return;
+    final all =
+        ref.read(cmsResourcesProvider).valueOrNull ?? const <Resource>[];
+    final targets = all.where((r) => _selected.contains(r.id)).toList();
+    if (targets.isEmpty) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (action == _BulkAction.delete) {
+      final ok = await _confirmBulkDelete(context, targets.length);
+      if (!ok) return;
+    }
+    var done = 0;
+    final failed = <String>[];
+    for (final r in targets) {
+      try {
+        switch (action) {
+          case _BulkAction.publish:
+            await repo.setStatus(r, ResourceStatus.active);
+            break;
+          case _BulkAction.archive:
+            await repo.setStatus(r, ResourceStatus.archived);
+            break;
+          case _BulkAction.delete:
+            await repo.delete(r.id);
+            break;
+        }
+        done++;
+      } catch (_) {
+        failed.add(r.title);
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _selected.clear();
+      _selectionMode = false;
+    });
+    messenger.showSnackBar(SnackBar(
+      content: Text(failed.isEmpty
+          ? '$done updated ✓'
+          : '$done updated · ${failed.length} skipped '
+              '(e.g. "${failed.first}" needs a title, organization & link to publish)'),
+    ));
+  }
+
+  Future<bool> _confirmBulkDelete(BuildContext context, int count) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete $count resource${count == 1 ? '' : 's'}?'),
+        content: const Text(
+            'This permanently deletes the selected resources. Consider '
+            'archiving instead to preserve analytics and history.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppColors.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
   }
 
   void _openEditor(BuildContext context, Resource? resource) {
@@ -205,14 +351,22 @@ class _CmsResourcesScreenState extends ConsumerState<CmsResourcesScreen> {
 
 enum _RowAction { publish, draft, archive, duplicate, delete }
 
+enum _BulkAction { publish, archive, delete }
+
 class _ResourceRow extends StatelessWidget {
   final Resource resource;
   final bool canEdit;
+  final bool selectionMode;
+  final bool selected;
+  final VoidCallback onToggle;
   final VoidCallback onEdit;
   final ValueChanged<_RowAction> onAction;
   const _ResourceRow({
     required this.resource,
     required this.canEdit,
+    required this.selectionMode,
+    required this.selected,
+    required this.onToggle,
     required this.onEdit,
     required this.onAction,
   });
@@ -223,13 +377,24 @@ class _ResourceRow extends StatelessWidget {
     final r = resource;
     final effective = r.effectiveStatus;
     return InkWell(
-      onTap: canEdit ? onEdit : null,
+      onTap: selectionMode ? onToggle : (canEdit ? onEdit : null),
       borderRadius: BorderRadius.circular(14),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: softCard(context),
+        decoration: softCard(context).copyWith(
+          border: selected
+              ? Border.all(color: AppColors.primary, width: 1.6)
+              : null,
+        ),
         child: Row(
           children: [
+            if (selectionMode) ...[
+              Checkbox(
+                value: selected,
+                onChanged: (_) => onToggle(),
+              ),
+              const SizedBox(width: 4),
+            ],
             Container(
               width: 40,
               height: 40,
@@ -264,7 +429,7 @@ class _ResourceRow extends StatelessWidget {
                 child: Icon(Icons.star_rounded, size: 16, color: AppColors.accent),
               ),
             _StatusChip(status: effective, stored: r.status),
-            if (canEdit)
+            if (canEdit && !selectionMode)
               PopupMenuButton<_RowAction>(
                 onSelected: onAction,
                 itemBuilder: (_) => const [

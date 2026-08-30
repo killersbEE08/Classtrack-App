@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/expense.dart';
 
 /// CRUD for users/{uid}/expenses.
@@ -16,7 +17,7 @@ class ExpenseRepository {
   Stream<List<Expense>> watchExpenses() {
     return _col.snapshots().map((snap) {
       final list =
-          snap.docs.map((d) => Expense.fromMap(d.id, d.data())).toList();
+          parseDocsSafely(snap.docs, Expense.fromMap, context: 'expenses');
       list.sort((a, b) => b.date.compareTo(a.date));
       return list;
     });

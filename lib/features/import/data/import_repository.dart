@@ -56,6 +56,9 @@ class ImportRepository {
   Future<ParsedSchedule> parseImage(Uint8List bytes) =>
       _gemini.parseSchedule(imageBytes: bytes);
 
+  Future<ParsedSchedule> parsePdf(Uint8List bytes) =>
+      _gemini.parseSchedule(pdfBytes: bytes);
+
   /// Signs the user into Google (read-only calendar scope) and turns their
   /// upcoming events into a reviewable schedule. No AI/Gemini needed.
   Future<ParsedSchedule> parseGoogleCalendar() async {
@@ -66,17 +69,42 @@ class ImportRepository {
   /// Signs the user into Google (read-only calendar scope) and turns EVERY
   /// upcoming calendar event into an `event`-type task item. This is what the
   /// "Google Calendar" import brings into the Tasks list.
-  Future<List<CalendarEventTask>> parseGoogleCalendarEvents() async {
-    final events = await _calendar.fetchUpcomingEvents();
+  ///
+  /// Pass [interactive] `false` for the background auto-sync so it reuses the
+  /// existing session/scopes and never pops a sign-in dialog.
+  Future<List<CalendarEventTask>> parseGoogleCalendarEvents({
+    bool interactive = true,
+  }) async {
+    final events = await _calendar.fetchUpcomingEvents(interactive: interactive);
     return googleCalendarToEventTasks(events);
   }
 
   /// Fetches the user's Google **Tasks** (to-dos) and maps them into plain
   /// task items. Best-effort: returns an empty list if the Tasks scope/API
   /// isn't available, so calendar import is never blocked.
-  Future<List<GoogleTaskItem>> parseGoogleTasks() async {
-    final tasks = await _calendar.fetchTasks();
+  Future<List<GoogleTaskItem>> parseGoogleTasks({bool interactive = true}) async {
+    final tasks = await _calendar.fetchTasks(interactive: interactive);
     return googleTasksToItems(tasks);
+  }
+
+  /// Runs the daily background sync: silently (no dialogs) fetches the user's
+  /// recent/upcoming calendar events and Google Tasks and commits the ones not
+  /// already saved. De-duplication (by source id, then title + date/time) means
+  /// running this every day never creates duplicates. Returns the number of
+  /// newly-added items via [ImportResult]. A user who isn't currently signed in
+  /// to Google (or hasn't granted the scopes) yields an empty result instead of
+  /// an interactive prompt.
+  Future<ImportResult> autoSyncGoogle() async {
+    List<CalendarEventTask> events;
+    try {
+      events = await parseGoogleCalendarEvents(interactive: false);
+    } on GoogleCalendarCancelled {
+      // No silent session / scopes -> nothing to sync, no UI. Bail quietly.
+      return const ImportResult();
+    }
+    final tasks = await parseGoogleTasks(interactive: false);
+    if (events.isEmpty && tasks.isEmpty) return const ImportResult();
+    return commitGoogleImport(events: events, tasks: tasks);
   }
 
   /// Imports both calendar events (as `event` tasks) and Google Tasks (as

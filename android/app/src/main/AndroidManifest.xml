@@ -67,6 +67,12 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="classtrack_push" />
+        <!-- Monochrome status-bar icon for background/terminated FCM pushes.
+             Must be a white/transparent drawable, else Android shows a blank
+             dot (the full-colour launcher icon flattens to a solid square). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_notify" />
         <!-- Tint applied to the (monochrome) status-bar notification icon. -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
@@ -86,6 +92,16 @@
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
             </intent-filter>
         </receiver>
+
+        <!-- flutter_local_notifications: REQUIRED for notification action
+             buttons. The after-class "How was <subject>?" check-in shows
+             Present / Absent buttons; without this receiver declared, tapping
+             them does nothing (and the app is never launched to record the
+             mark), so the after-class attendance nudge appears "broken" while
+             plain body-tap reminders keep working. -->
+        <receiver
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver" />
 
         <!-- ClassTrack home-screen widget -->
         <receiver

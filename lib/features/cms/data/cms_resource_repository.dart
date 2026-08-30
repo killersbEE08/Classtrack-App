@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/firestore_parsing.dart';
 import '../../opportunities/domain/resource.dart';
 import '../../opportunities/domain/resource_status.dart';
 
@@ -36,7 +37,7 @@ class CmsResourceRepository {
         .limit(limit)
         .snapshots()
         .map((snap) =>
-            snap.docs.map((d) => Resource.fromMap(d.id, d.data())).toList());
+            parseDocsSafely(snap.docs, Resource.fromMap, context: 'resources'));
   }
 
   Stream<Resource?> watchById(String id) => _col.doc(id).snapshots().map((s) {

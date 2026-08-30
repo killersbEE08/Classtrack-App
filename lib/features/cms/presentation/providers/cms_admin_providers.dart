@@ -2,6 +2,7 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/providers/firebase_providers.dart';
+import '../../../../core/utils/firestore_parsing.dart';
 import '../../domain/audit_log.dart';
 
 /// Streams recent audit-log entries (admins only per Firestore rules).
@@ -13,7 +14,7 @@ final auditLogsProvider = StreamProvider<List<AuditLogEntry>>((ref) {
       .limit(150)
       .snapshots()
       .map((s) =>
-          s.docs.map((d) => AuditLogEntry.fromMap(d.id, d.data())).toList());
+          parseDocsSafely(s.docs, AuditLogEntry.fromMap, context: 'auditLogs'));
 });
 
 /// Calls the admin-only `setUserRole` callable and reports success/failure.
@@ -54,4 +55,60 @@ class SetUserRoleController extends StateNotifier<AsyncValue<void>> {
 final setUserRoleControllerProvider =
     StateNotifierProvider<SetUserRoleController, AsyncValue<void>>((ref) {
   return SetUserRoleController(ref.watch(firebaseFunctionsProvider));
+});
+
+/// A user resolved by email lookup (Admin SDK), with their current CMS role.
+class UserLookup {
+  final String uid;
+  final String email;
+  final String? displayName;
+
+  /// Role claim key ('none' when no CMS access).
+  final String roleKey;
+  const UserLookup({
+    required this.uid,
+    required this.email,
+    this.displayName,
+    required this.roleKey,
+  });
+}
+
+/// Looks up a user by email via the admin-only `lookupUserByEmail` callable.
+class UserLookupController extends StateNotifier<AsyncValue<UserLookup?>> {
+  final FirebaseFunctions _functions;
+  UserLookupController(this._functions) : super(const AsyncData(null));
+
+  void clear() => state = const AsyncData(null);
+
+  Future<void> lookup(String email) async {
+    state = const AsyncLoading();
+    try {
+      final res = await _functions
+          .httpsCallable('lookupUserByEmail')
+          .call({'email': email.trim()});
+      final d = (res.data as Map).cast<String, dynamic>();
+      state = AsyncData(UserLookup(
+        uid: d['uid'] as String,
+        email: (d['email'] as String?) ?? email.trim(),
+        displayName: d['displayName'] as String?,
+        roleKey: (d['role'] as String?) ?? 'none',
+      ));
+    } on FirebaseFunctionsException catch (e, st) {
+      state = AsyncError(
+        e.code == 'not-found'
+            ? 'No user found with that email.'
+            : e.code == 'permission-denied'
+                ? 'Admins only.'
+                : (e.message ?? 'Lookup failed.'),
+        st,
+      );
+    } catch (e, st) {
+      state = AsyncError('Something went wrong. Try again.', st);
+    }
+  }
+}
+
+final userLookupControllerProvider =
+    StateNotifierProvider<UserLookupController, AsyncValue<UserLookup?>>((ref) {
+  return UserLookupController(ref.watch(firebaseFunctionsProvider));
 });

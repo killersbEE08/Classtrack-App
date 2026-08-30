@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/resource.dart';
 import '../domain/resource_status.dart';
 import '../domain/resource_type.dart';
@@ -27,16 +28,32 @@ class ResourceRepository {
 
   /// Streams all student-visible resources, highest [Resource.priority] first.
   /// Callers (Phase 3 UI) apply type/country/search filtering on top.
+  ///
+  /// Resilient by design: each document is parsed in isolation so one malformed
+  /// record (e.g. a mistyped field entered in the CMS) can never break the
+  /// whole feed. Ordering is done client-side so the query needs no composite
+  /// index (avoids a "requires an index" failure that would blank the screen).
   Stream<List<Resource>> watchVisible({int limit = 200}) {
+    if (_visibleStatusKeys.isEmpty) {
+      return Stream.value(const <Resource>[]);
+    }
     return _col
         .where('status', whereIn: _visibleStatusKeys)
-        .orderBy('priority', descending: true)
         .limit(limit)
         .snapshots()
-        .map((snap) => snap.docs
-            .map((d) => Resource.fromMap(d.id, d.data()))
-            .where((r) => r.isVisibleToStudents)
-            .toList());
+        .map((snap) {
+      final out = <Resource>[];
+      for (final d in snap.docs) {
+        try {
+          final r = Resource.fromMap(d.id, d.data());
+          if (r.isVisibleToStudents) out.add(r);
+        } catch (_) {
+          // Skip a single malformed document rather than failing the feed.
+        }
+      }
+      out.sort((a, b) => b.priority.compareTo(a.priority));
+      return out;
+    });
   }
 
   /// Streams a single resource by id (null if missing/removed).
@@ -58,7 +75,8 @@ class ResourceRepository {
       final chunk = list.sublist(i, (i + 30).clamp(0, list.length));
       final snap =
           await _col.where(FieldPath.documentId, whereIn: chunk).get();
-      out.addAll(snap.docs.map((d) => Resource.fromMap(d.id, d.data())));
+      out.addAll(
+          parseDocsSafely(snap.docs, Resource.fromMap, context: 'resources'));
     }
     return out;
   }
@@ -157,5 +175,37 @@ class ResourceQueries {
       if (!r.targetsCountry(country)) return false;
       return true;
     }).toList();
+  }
+
+  /// Related resources for a detail page: manually-curated
+  /// [Resource.relatedResourceIds] first (honouring editorial intent), then
+  /// auto-filled with other active resources of the same type — so a detail
+  /// page never dead-ends. Excludes the current resource and duplicates.
+  static List<Resource> related(
+    Resource current,
+    List<Resource> all, {
+    int limit = 4,
+  }) {
+    final byId = {for (final r in all) r.id: r};
+    final out = <Resource>[];
+    final seen = <String>{current.id};
+
+    for (final id in current.relatedResourceIds) {
+      if (out.length >= limit) return out;
+      final r = byId[id];
+      if (r != null && !seen.contains(r.id) && r.isVisibleToStudents) {
+        out.add(r);
+        seen.add(r.id);
+      }
+    }
+    for (final r in all) {
+      if (out.length >= limit) break;
+      if (seen.contains(r.id)) continue;
+      if (r.type == current.type && r.isInActiveFeed) {
+        out.add(r);
+        seen.add(r.id);
+      }
+    }
+    return out;
   }
 }

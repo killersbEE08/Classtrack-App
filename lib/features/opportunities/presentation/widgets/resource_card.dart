@@ -7,38 +7,188 @@ import '../../domain/resource.dart';
 import '../../domain/resource_status.dart';
 import '../providers/opportunities_providers.dart';
 
-/// A thumbnail that shows the resource's image/logo, falling back to a tinted
-/// type icon when there's no image or it fails to load.
-class ResourceThumb extends StatelessWidget {
+/// A thumbnail that shows the resource's logo/image filling a rounded tile like
+/// a native app icon, falling back to a clean brand monogram (e.g. "A" for
+/// Apple) when there's no image or it fails to load.
+///
+/// When [preferLogo] is true the uploaded brand [Resource.logoUrl] is used
+/// first (better for small card thumbnails), otherwise the wide hero
+/// [Resource.imageUrl] wins.
+class ResourceThumb extends StatefulWidget {
   final Resource resource;
   final double size;
-  const ResourceThumb({super.key, required this.resource, this.size = 52});
+  final bool preferLogo;
+  const ResourceThumb({
+    super.key,
+    required this.resource,
+    this.size = 52,
+    this.preferLogo = false,
+  });
+
+  /// The brand initial for the monogram fallback (e.g. "Think-cell" → "T").
+  static String _monogram(String brand) {
+    final s = brand.trim();
+    if (s.isEmpty) return '';
+    return s[0].toUpperCase();
+  }
+
+  @override
+  State<ResourceThumb> createState() => _ResourceThumbState();
+}
+
+class _ResourceThumbState extends State<ResourceThumb> {
+  ImageProvider? _provider;
+  ImageStream? _stream;
+  ImageStreamListener? _listener;
+  double? _aspect; // width / height, once the image resolves
+  bool _failed = false;
+
+  String? get _url {
+    final r = widget.resource;
+    final logo = r.logoUrl;
+    final hero = r.imageUrl;
+    final img = widget.preferLogo
+        ? ((logo != null && logo.isNotEmpty) ? logo : hero)
+        : r.displayImage;
+    return (img == null || img.isEmpty) ? null : img;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(covariant ResourceThumb old) {
+    super.didUpdateWidget(old);
+    if (old.resource.id != widget.resource.id ||
+        old.resource.logoUrl != widget.resource.logoUrl ||
+        old.resource.imageUrl != widget.resource.imageUrl ||
+        old.size != widget.size ||
+        old.preferLogo != widget.preferLogo) {
+      _aspect = null;
+      _failed = false;
+      _resolve();
+    }
+  }
+
+  void _detach() {
+    if (_stream != null && _listener != null) {
+      _stream!.removeListener(_listener!);
+    }
+    _stream = null;
+    _listener = null;
+  }
+
+  void _resolve() {
+    _detach();
+    _provider = null;
+    final url = _url;
+    if (url == null) return;
+
+    // Decode near display resolution (keeps lists smooth); ResizeImage keeps
+    // the aspect ratio so we can measure it from the delivered frame.
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final target = (widget.size * dpr).round().clamp(48, 512);
+    final provider = ResizeImage(NetworkImage(url), width: target);
+    _provider = provider;
+
+    final listener = ImageStreamListener(
+      (info, _) {
+        final w = info.image.width.toDouble();
+        final h = info.image.height.toDouble();
+        if (mounted) setState(() => _aspect = h == 0 ? 1 : w / h);
+      },
+      onError: (_, __) {
+        if (mounted) setState(() => _failed = true);
+      },
+    );
+    _listener = listener;
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    _stream = stream;
+    stream.addListener(listener);
+  }
+
+  @override
+  void dispose() {
+    _detach();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final color = resource.type.color;
+    final r = widget.resource;
+    final size = widget.size;
+    final color = r.type.color;
+    final radius = size * 0.28;
+
+    // Clean brand monogram used while loading and whenever there's no image —
+    // far more professional than a generic type icon (think Gmail avatars).
+    final letter = ResourceThumb._monogram(r.brandName);
     final fallback = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(
+          colors: [
+            color.withValues(alpha: 0.22),
+            color.withValues(alpha: 0.12),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(radius),
       ),
       alignment: Alignment.center,
-      child: Icon(resource.type.icon, color: color, size: size * 0.42),
+      child: letter.isEmpty
+          ? Icon(r.type.icon, color: color, size: size * 0.42)
+          : Text(
+              letter,
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w800,
+                fontSize: size * 0.4,
+                height: 1,
+              ),
+            ),
     );
-    final img = resource.displayImage;
-    if (img == null || img.isEmpty) return fallback;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: Image.network(
-        img,
-        width: size,
-        height: size,
-        fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => fallback,
-        loadingBuilder: (ctx, child, progress) =>
-            progress == null ? child : fallback,
+
+    // Show the monogram until the image has resolved (no white flash / no
+    // fit-flash), then render with the fit chosen from its true aspect ratio.
+    if (_url == null || _failed || _provider == null || _aspect == null) {
+      return fallback;
+    }
+
+    final squareish = _aspect! >= 0.8 && _aspect! <= 1.25;
+    if (squareish) {
+      // App-icon style: fill the rounded tile edge-to-edge.
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: Image(
+          image: _provider!,
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+        ),
+      );
+    }
+    // Wide / tall logo or wordmark: show it in full on a clean white tile,
+    // never cropped.
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(radius),
+      ),
+      clipBehavior: Clip.antiAlias,
+      padding: EdgeInsets.all(size * 0.14),
+      child: Image(
+        image: _provider!,
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
       ),
     );
   }
@@ -96,28 +246,40 @@ class ResourceCard extends ConsumerWidget {
     final days = resource.daysUntilDeadline;
     final match = ref.watch(resourceScoreProvider(resource));
 
-    String? deadlineLabel;
-    Color deadlineColor = theme.hintColor;
+    // A single, most-relevant meta line keeps the card scannable (signal over
+    // noise): discount value → non-active status → closing-soon → match.
+    IconData? metaIcon;
+    String? metaLabel;
+    Color metaColor = theme.hintColor;
     if (resource.type.isDiscount) {
-      deadlineLabel =
-          (resource.discountText != null && resource.discountText!.isNotEmpty)
-              ? resource.discountText
-              : null;
-      deadlineColor = AppColors.success;
-    } else if (days != null) {
-      if (days > 1) {
-        deadlineLabel = 'Closes in $days days';
-        deadlineColor = days <= 7 ? AppColors.warning : theme.hintColor;
-      } else if (days == 1) {
-        deadlineLabel = 'Closes tomorrow';
-        deadlineColor = AppColors.warning;
-      } else if (days == 0) {
-        deadlineLabel = 'Closes today';
-        deadlineColor = AppColors.danger;
-      } else {
-        deadlineLabel = 'Closed';
-        deadlineColor = AppColors.danger;
+      if (resource.discountText != null && resource.discountText!.isNotEmpty) {
+        metaIcon = Icons.redeem_rounded;
+        metaLabel = resource.discountText;
+        metaColor = AppColors.success;
       }
+    } else if (status != ResourceStatus.active) {
+      metaIcon = Icons.schedule_rounded;
+      metaLabel = status.label;
+      metaColor = status.color;
+    } else if (days != null && days <= 7) {
+      metaIcon = Icons.schedule_rounded;
+      if (days > 1) {
+        metaLabel = 'Closes in $days days';
+        metaColor = AppColors.warning;
+      } else if (days == 1) {
+        metaLabel = 'Closes tomorrow';
+        metaColor = AppColors.warning;
+      } else if (days == 0) {
+        metaLabel = 'Closes today';
+        metaColor = AppColors.danger;
+      } else {
+        metaLabel = 'Closed';
+        metaColor = AppColors.danger;
+      }
+    } else if (match.personalized && match.score >= 60) {
+      metaIcon = Icons.auto_awesome_rounded;
+      metaLabel = '${match.score}% match';
+      metaColor = AppColors.success;
     }
 
     return GestureDetector(
@@ -129,15 +291,15 @@ class ResourceCard extends ConsumerWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ResourceThumb(resource: resource),
-            const SizedBox(width: 12),
+            ResourceThumb(resource: resource, size: 60),
+            const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Wrap(
                     spacing: 6,
-                    runSpacing: 4,
+                    runSpacing: 6,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       ResourcePill(
@@ -145,50 +307,40 @@ class ResourceCard extends ConsumerWidget {
                         color: resource.type.color,
                         icon: resource.type.icon,
                       ),
-                      if (status != ResourceStatus.active)
-                        ResourcePill(label: status.label, color: status.color),
                       if (resource.sponsored)
                         const ResourcePill(
-                            label: 'Sponsored', color: AppColors.accent),
-                      if (!resource.type.isDiscount &&
-                          match.personalized &&
-                          match.score >= 60)
-                        ResourcePill(
-                          label: '${match.score}% match',
-                          color: AppColors.success,
-                          icon: Icons.auto_awesome_rounded,
-                        ),
+                            label: 'Sponsored',
+                            color: AppColors.accent,
+                            icon: Icons.star_rounded),
+                      if (resource.verified)
+                        const Icon(Icons.verified_rounded,
+                            size: 16, color: AppColors.info),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Text(resource.title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
+                      style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700, height: 1.15)),
+                  const SizedBox(height: 3),
                   Text(resource.brandName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: theme.hintColor)),
-                  if (deadlineLabel != null) ...[
+                  if (metaLabel != null) ...[
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        Icon(
-                            resource.type.isDiscount
-                                ? Icons.local_offer_rounded
-                                : Icons.schedule_rounded,
-                            size: 13,
-                            color: deadlineColor),
+                        Icon(metaIcon, size: 13, color: metaColor),
                         const SizedBox(width: 4),
                         Flexible(
-                          child: Text(deadlineLabel,
+                          child: Text(metaLabel,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: theme.textTheme.bodySmall?.copyWith(
-                                  color: deadlineColor,
+                                  color: metaColor,
                                   fontWeight: FontWeight.w600)),
                         ),
                       ],

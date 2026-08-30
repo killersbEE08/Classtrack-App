@@ -7,6 +7,8 @@ import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/date_utils.dart';
 import '../../../../shared/widgets/progress_ring.dart';
 import '../../../../shared/widgets/ui_kit.dart';
+import '../../../../shared/widgets/placement_slot.dart';
+import '../../../cms/domain/marketing.dart';
 import '../../../subjects/presentation/providers/subject_providers.dart';
 import '../../domain/exam.dart';
 import '../providers/exam_providers.dart';
@@ -63,6 +65,7 @@ class _ExamsScreenState extends ConsumerState<ExamsScreen> {
                 style: theme.textTheme.bodyMedium
                     ?.copyWith(color: theme.textTheme.bodySmall?.color)),
             const SizedBox(height: 18),
+            const PlacementSlot(placement: Placements.exams),
             if (upcoming.isEmpty && past.isEmpty)
               _empty(context)
             else ...[
@@ -161,18 +164,18 @@ class _ExamsScreenState extends ConsumerState<ExamsScreen> {
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(22),
         onTap: () => _openEditor(context, exam: e),
         child: Container(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [accent, Color.lerp(accent, Colors.black, 0.28)!],
             ),
-            borderRadius: BorderRadius.circular(28),
-            boxShadow: AppColors.softShadow(opacity: 0.22, blur: 26),
+            borderRadius: BorderRadius.circular(22),
+            boxShadow: AppColors.softShadow(opacity: 0.20, blur: 22),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -201,7 +204,7 @@ class _ExamsScreenState extends ConsumerState<ExamsScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
@@ -214,7 +217,7 @@ class _ExamsScreenState extends ConsumerState<ExamsScreen> {
                               color: Colors.white,
                               fontWeight: FontWeight.w800,
                               height: 1,
-                              fontSize: 40)),
+                              fontSize: 30)),
                       if (showDaysUnit)
                         const Text('days to go',
                             style: TextStyle(
@@ -226,12 +229,12 @@ class _ExamsScreenState extends ConsumerState<ExamsScreen> {
                   // Readiness ring or prompt.
                   if (e.hasTopics)
                     SizedBox(
-                      width: 64,
-                      height: 64,
+                      width: 52,
+                      height: 52,
                       child: AnimatedProgressRing(
                         percent: e.readiness * 100,
-                        size: 64,
-                        strokeWidth: 7,
+                        size: 52,
+                        strokeWidth: 6,
                         color: Colors.white,
                         centerLabel: '${e.topicsDone}/${e.topics.length}',
                       ),
@@ -260,9 +263,9 @@ class _ExamsScreenState extends ConsumerState<ExamsScreen> {
                     ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               Text(e.title,
-                  style: theme.textTheme.titleLarge?.copyWith(
+                  style: theme.textTheme.titleMedium?.copyWith(
                       color: Colors.white, fontWeight: FontWeight.w800),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis),

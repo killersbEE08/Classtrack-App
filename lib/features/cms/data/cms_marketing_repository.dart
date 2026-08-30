@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/firestore_parsing.dart';
 import '../domain/cms_notification.dart';
 import '../domain/marketing.dart';
 
@@ -25,7 +26,7 @@ class CmsMarketingRepository {
         .limit(limit)
         .snapshots()
         .map((s) =>
-            s.docs.map((d) => CmsBanner.fromMap(d.id, d.data())).toList());
+            parseDocsSafely(s.docs, CmsBanner.fromMap, context: 'banners'));
   }
 
   Future<String> saveBanner(CmsBanner b) async {
@@ -55,7 +56,7 @@ class CmsMarketingRepository {
         .limit(limit)
         .snapshots()
         .map((s) =>
-            s.docs.map((d) => Campaign.fromMap(d.id, d.data())).toList());
+            parseDocsSafely(s.docs, Campaign.fromMap, context: 'campaigns'));
   }
 
   Future<String> saveCampaign(Campaign c) async {
@@ -87,8 +88,8 @@ class CmsMarketingRepository {
         .orderBy('createdAt', descending: true)
         .limit(limit)
         .snapshots()
-        .map((s) =>
-            s.docs.map((d) => CmsNotification.fromMap(d.id, d.data())).toList());
+        .map((s) => parseDocsSafely(s.docs, CmsNotification.fromMap,
+            context: 'notifications'));
   }
 
   /// Enqueues a notification for the backend to deliver. `country` null/empty

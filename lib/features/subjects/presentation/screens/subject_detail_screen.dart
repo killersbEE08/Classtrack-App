@@ -61,7 +61,10 @@ class SubjectDetailScreen extends ConsumerWidget {
     final subjectAsync = ref.watch(subjectProvider(subjectId));
     return subjectAsync.when(
       loading: () => const Scaffold(body: LoadingView()),
-      error: (e, _) => Scaffold(body: ErrorView(error: e)),
+      error: (e, _) => Scaffold(
+          body: ErrorView(
+              error: e,
+              onRetry: () => ref.invalidate(subjectProvider(subjectId)))),
       data: (subject) {
         if (subject == null) {
           return const Scaffold(body: Center(child: Text('Subject not found')));

@@ -117,27 +117,37 @@ class AppTheme {
           borderRadius: BorderRadius.circular(26),
         ),
       ),
+      // Inputs read as crisp, self-contained controls on ANY background: a
+      // 1px resting border defines the field even where the fill color matches
+      // the surface behind it (e.g. the CMS content area), and a 1.6px primary
+      // ring + coloured floating label make focus unmistakable.
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: surfaceAlt,
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: border, width: 1.2),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: BorderSide.none,
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide(color: border, width: 1.2),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(14),
           borderSide: BorderSide(color: scheme.primary, width: 1.6),
         ),
         errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(18),
-          borderSide: const BorderSide(color: AppColors.danger),
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.danger, width: 1.2),
         ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.danger, width: 1.6),
+        ),
+        floatingLabelStyle: textTheme.bodyMedium
+            ?.copyWith(color: scheme.primary, fontWeight: FontWeight.w600),
         labelStyle: textTheme.bodyMedium?.copyWith(color: textSecondary),
         hintStyle: textTheme.bodyMedium?.copyWith(color: textSecondary),
       ),

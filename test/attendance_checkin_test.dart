@@ -46,6 +46,44 @@ void main() {
     });
   });
 
+  group('NotificationService.attendanceCheckOnceId (one-off classes)', () {
+    test('is deterministic so re-scheduling overwrites (no duplicates)', () {
+      final a = NotificationService.attendanceCheckOnceId(
+          'math', '2026-08-15', '09:00', '10:00');
+      final b = NotificationService.attendanceCheckOnceId(
+          'math', '2026-08-15', '09:00', '10:00');
+      expect(a, equals(b));
+    });
+
+    test('different dates for the same class slot -> distinct ids', () {
+      final d1 = NotificationService.attendanceCheckOnceId(
+          'math', '2026-08-15', '09:00', '10:00');
+      final d2 = NotificationService.attendanceCheckOnceId(
+          'math', '2026-08-22', '09:00', '10:00');
+      expect(d1, isNot(equals(d2)));
+    });
+
+    test('stays in band 8 and never collides with the recurring check-in id',
+        () {
+      const bandStart = 8 * 2000000;
+      const bandEnd = bandStart + 1048576;
+      final onceId = NotificationService.attendanceCheckOnceId(
+          'math', '2026-08-15', '09:00', '10:00');
+      expect(onceId, greaterThanOrEqualTo(bandStart));
+      expect(onceId, lessThan(bandEnd));
+
+      // A one-off and a weekly recurring check-in for the same subject/slot
+      // must not share an id, or one would silently cancel the other.
+      final weeklyId =
+          NotificationService.attendanceCheckId('math', 0, '09:00', '10:00');
+      expect(onceId, isNot(equals(weeklyId)));
+
+      // Nor may it land in the class-reminder band (1 * 2_000_000).
+      final classId = NotificationService.classReminderId('math', 0, '09:00');
+      expect(onceId, isNot(equals(classId)));
+    });
+  });
+
   group('NotificationService.parseAttendanceMark', () {
     test('parses a present action payload with a slot', () {
       final r = NotificationService.parseAttendanceMark(

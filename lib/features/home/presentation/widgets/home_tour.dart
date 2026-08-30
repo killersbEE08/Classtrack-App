@@ -1,302 +1,182 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import '../../../../core/theme/app_colors.dart';
 
-/// One step of the [HomeTour]. When [key] is null the step is a centered
-/// "welcome" card with no spotlight; otherwise the widget that owns [key] is
-/// spotlit and a callout is placed next to it.
+/// One step of the home walkthrough.
 class TourStep {
-  final GlobalKey? key;
   final String title;
   final String body;
   final IconData icon;
-
-  /// A circular spotlight (for round targets like the FAB) instead of a
-  /// rounded rectangle.
-  final bool circle;
-
-  const TourStep({
-    required this.title,
-    required this.body,
-    required this.icon,
-    this.key,
-    this.circle = false,
-  });
+  const TourStep({required this.title, required this.body, required this.icon});
 }
 
-/// A lightweight, dependency-free coach-mark tour. Dims the screen, punches a
-/// spotlight hole around each target in turn, and shows a callout with
-/// Skip / Next / Done controls. Insert it into the [Overlay] above the shell.
+/// Shows the first-run home walkthrough as a **safe, always-dismissible** bottom
+/// sheet (swipe-down or tap the scrim to close, or use Skip/Done).
 ///
-/// It reads each target's on-screen rectangle from its [GlobalKey] at paint
-/// time, so it works with the app's existing bottom nav and FAB without those
-/// widgets needing to know anything about the tour.
-class HomeTour extends StatefulWidget {
-  final List<TourStep> steps;
-  final VoidCallback onFinish;
+/// This intentionally replaces the previous full-screen spotlight overlay,
+/// which on some renderers could leave a dark scrim that blocked all input.
+/// [onFinish] runs once the sheet closes by any means, so the tour is always
+/// marked as seen and the app is never left in a stuck state.
+Future<void> showHomeTour(
+  BuildContext context, {
+  required List<TourStep> steps,
+  required VoidCallback onFinish,
+}) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Theme.of(context).cardColor,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+    builder: (_) => _HomeTourSheet(steps: steps),
+  );
+  onFinish();
+}
 
-  const HomeTour({super.key, required this.steps, required this.onFinish});
+class _HomeTourSheet extends StatefulWidget {
+  final List<TourStep> steps;
+  const _HomeTourSheet({required this.steps});
 
   @override
-  State<HomeTour> createState() => _HomeTourState();
+  State<_HomeTourSheet> createState() => _HomeTourSheetState();
 }
 
-class _HomeTourState extends State<HomeTour> {
+class _HomeTourSheetState extends State<_HomeTourSheet> {
+  final _controller = PageController();
   int _index = 0;
 
-  void _next() {
-    if (_index >= widget.steps.length - 1) {
-      widget.onFinish();
-    } else {
-      setState(() => _index++);
-    }
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
   }
 
-  Rect? _rectFor(GlobalKey? key) {
-    if (key == null) return null;
-    final ctx = key.currentContext;
-    if (ctx == null) return null;
-    final box = ctx.findRenderObject() as RenderBox?;
-    if (box == null || !box.attached) return null;
-    return box.localToGlobal(Offset.zero) & box.size;
+  bool get _isLast => _index >= widget.steps.length - 1;
+
+  void _next() {
+    if (_isLast) {
+      Navigator.of(context).maybePop();
+    } else {
+      _controller.nextPage(
+          duration: const Duration(milliseconds: 260), curve: Curves.easeOut);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final step = widget.steps[_index];
-    final size = MediaQuery.of(context).size;
-    final rawRect = _rectFor(step.key);
-    // Inflate the spotlight a little so the target isn't cropped tight.
-    final hole = rawRect?.inflate(8);
-    final isLast = _index == widget.steps.length - 1;
-
-    return Material(
-      type: MaterialType.transparency,
-      child: Stack(
-        children: [
-          // Dimmed backdrop with a spotlight cut-out. Tapping it advances.
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: _next,
-              child: CustomPaint(
-                painter: _SpotlightPainter(hole: hole, circle: step.circle),
+    final theme = Theme.of(context);
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: theme.dividerColor,
+                borderRadius: BorderRadius.circular(4),
               ),
             ),
-          ),
-          _callout(context, step, hole, size, isLast),
-        ],
-      ),
-    );
-  }
-
-  Widget _callout(
-    BuildContext context,
-    TourStep step,
-    Rect? hole,
-    Size size,
-    bool isLast,
-  ) {
-    final theme = Theme.of(context);
-
-    // A definite, bounded card width. Using a fixed width (rather than only a
-    // maxWidth) guarantees the button row's Spacer never sees an unbounded
-    // width — which previously threw "BoxConstraints forces an infinite width"
-    // and left the tour as an un-tappable dark scrim.
-    final double cardWidth =
-        math.min(size.width - 40.0, 420.0).clamp(0.0, size.width).toDouble();
-
-    final card = _TourCard(
-      icon: step.icon,
-      title: step.title,
-      body: step.body,
-      index: _index,
-      total: widget.steps.length,
-      isLast: isLast,
-      onSkip: widget.onFinish,
-      onNext: _next,
-    );
-
-    // No target -> centered welcome card.
-    if (hole == null) {
-      return Center(
-        child: SizedBox(width: cardWidth, child: card),
-      );
-    }
-
-    // Place the callout on the side of the target with the most room.
-    final spaceAbove = hole.top;
-    final spaceBelow = size.height - hole.bottom;
-    final below = spaceBelow >= spaceAbove;
-    final double left =
-        ((size.width - cardWidth) / 2).clamp(0.0, size.width).toDouble();
-
-    return Positioned(
-      left: left,
-      width: cardWidth,
-      top: below ? hole.bottom + 16 : null,
-      bottom: below ? null : size.height - hole.top + 16,
-      child: DefaultTextStyle(
-        style: theme.textTheme.bodyMedium!,
-        child: card,
-      ),
-    );
-  }
-}
-
-class _TourCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String body;
-  final int index;
-  final int total;
-  final bool isLast;
-  final VoidCallback onSkip;
-  final VoidCallback onNext;
-
-  const _TourCard({
-    required this.icon,
-    required this.title,
-    required this.body,
-    required this.index,
-    required this.total,
-    required this.isLast,
-    required this.onSkip,
-    required this.onNext,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 420),
-      padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(22),
-        boxShadow: AppColors.softShadow(opacity: 0.18, blur: 28),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, color: AppColors.primary),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 232,
+              child: PageView.builder(
+                controller: _controller,
+                onPageChanged: (i) => setState(() => _index = i),
+                itemCount: widget.steps.length,
+                itemBuilder: (_, i) => _StepView(step: widget.steps[i]),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  title,
-                  style: theme.textTheme.titleMedium
-                      ?.copyWith(fontWeight: FontWeight.w800),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(body,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: theme.hintColor, height: 1.35)),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              // Progress dots.
-              Row(
-                children: List.generate(total, (i) {
-                  final active = i == index;
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    margin: const EdgeInsets.only(right: 6),
-                    width: active ? 18 : 7,
+            ),
+            const SizedBox(height: 14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                for (var i = 0; i < widget.steps.length; i++)
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 220),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: i == _index ? 20 : 7,
                     height: 7,
                     decoration: BoxDecoration(
-                      color: active
+                      color: i == _index
                           ? AppColors.primary
                           : AppColors.primary.withValues(alpha: 0.25),
                       borderRadius: BorderRadius.circular(4),
                     ),
-                  );
-                }),
-              ),
-              const Spacer(),
-              if (!isLast)
-                TextButton(
-                  onPressed: onSkip,
-                  child: const Text('Skip'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    child: const Text('Skip'),
+                  ),
                 ),
-              const SizedBox(width: 4),
-              FilledButton(
-                onPressed: onNext,
-                child: Text(isLast ? 'Done' : 'Next'),
-              ),
-            ],
-          ),
-        ],
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        minimumSize: const Size.fromHeight(48)),
+                    onPressed: _next,
+                    child: Text(_isLast ? 'Done' : 'Next'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _SpotlightPainter extends CustomPainter {
-  final Rect? hole;
-  final bool circle;
-
-  _SpotlightPainter({required this.hole, required this.circle});
+class _StepView extends StatelessWidget {
+  final TourStep step;
+  const _StepView({required this.step});
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final scrim = Paint()..color = Colors.black.withValues(alpha: 0.72);
-    final full = Offset.zero & size;
-
-    if (hole == null) {
-      canvas.drawRect(full, scrim);
-      return;
-    }
-
-    final Path holePath;
-    if (circle) {
-      final center = hole!.center;
-      final radius = hole!.longestSide / 2 + 4;
-      holePath = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
-    } else {
-      holePath = Path()
-        ..addRRect(
-            RRect.fromRectAndRadius(hole!, const Radius.circular(18)));
-    }
-
-    final combined = Path.combine(
-      PathOperation.difference,
-      Path()..addRect(full),
-      holePath,
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 84,
+          height: 84,
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [AppColors.primaryLight, AppColors.primary],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(26),
+            boxShadow: AppColors.softShadow(opacity: 0.28, blur: 22),
+          ),
+          child: Icon(step.icon, color: Colors.white, size: 40),
+        ),
+        const SizedBox(height: 20),
+        Text(step.title,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.w800)),
+        const SizedBox(height: 10),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text(step.body,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: theme.hintColor, height: 1.4)),
+        ),
+      ],
     );
-    canvas.drawPath(combined, scrim);
-
-    // Soft highlight ring around the spotlight.
-    final ring = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = Colors.white.withValues(alpha: 0.65);
-    if (circle) {
-      canvas.drawCircle(
-          hole!.center, hole!.longestSide / 2 + 4, ring);
-    } else {
-      canvas.drawRRect(
-          RRect.fromRectAndRadius(hole!, const Radius.circular(18)), ring);
-    }
   }
-
-  @override
-  bool shouldRepaint(covariant _SpotlightPainter old) =>
-      old.hole != hole || old.circle != circle;
 }

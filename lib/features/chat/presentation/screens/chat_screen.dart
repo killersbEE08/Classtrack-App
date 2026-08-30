@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/theme/app_colors.dart';
@@ -25,6 +26,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
   Uint8List? _pendingImage;
+  Uint8List? _pendingPdf;
+  String? _pendingPdfName;
 
   static const _suggestions = [
     'Am I free tomorrow afternoon?',
@@ -270,16 +273,113 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         .pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (file == null) return;
     final bytes = await file.readAsBytes();
-    setState(() => _pendingImage = bytes);
+    // One attachment at a time: a new image replaces any pending PDF.
+    setState(() {
+      _pendingImage = bytes;
+      _pendingPdf = null;
+      _pendingPdfName = null;
+    });
+  }
+
+  Future<void> _attachPdf() async {
+    final FilePickerResult? result;
+    try {
+      result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: const ['pdf'],
+        withData: true,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open the file picker: $e')),
+      );
+      return;
+    }
+    if (result == null || result.files.isEmpty) return; // cancelled
+    final picked = result.files.first;
+    final bytes = picked.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Couldn’t read that PDF. Try another file.')),
+      );
+      return;
+    }
+    const maxBytes = 10 * 1024 * 1024;
+    if (bytes.length > maxBytes) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That PDF is too large (max 10 MB).')),
+      );
+      return;
+    }
+    // One attachment at a time: a new PDF replaces any pending image.
+    setState(() {
+      _pendingPdf = bytes;
+      _pendingPdfName = picked.name;
+      _pendingImage = null;
+    });
+  }
+
+  /// Opens a small sheet letting the user attach a timetable photo OR a PDF.
+  void _showAttachMenu() {
+    final theme = Theme.of(context);
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Attach a timetable',
+                    style: theme.textTheme.titleMedium),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: const Text('Photo'),
+              subtitle: const Text('A screenshot or picture of your timetable'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _attachImage();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.picture_as_pdf_rounded),
+              title: const Text('PDF'),
+              subtitle: const Text('No photo? Upload your timetable PDF'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _attachPdf();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _send([String? preset]) async {
     final text = preset ?? _input.text;
     final image = _pendingImage;
-    if (text.trim().isEmpty && image == null) return;
+    final pdf = _pendingPdf;
+    final pdfName = _pendingPdfName;
+    if (text.trim().isEmpty && image == null && pdf == null) return;
     _input.clear();
-    setState(() => _pendingImage = null);
-    await ref.read(chatControllerProvider.notifier).send(text, image: image);
+    setState(() {
+      _pendingImage = null;
+      _pendingPdf = null;
+      _pendingPdfName = null;
+    });
+    await ref
+        .read(chatControllerProvider.notifier)
+        .send(text, image: image, pdf: pdf, pdfName: pdfName);
     _scrollToBottom();
   }
 
@@ -317,6 +417,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
             if (showSuggestions) _suggestionChips(theme),
             if (_pendingImage != null) _imagePreview(theme),
+            if (_pendingPdf != null) _pdfPreview(theme),
             _inputBar(theme, state.sending),
           ],
         ),
@@ -436,6 +537,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           // Opens the gallery so the assistant can read a timetable photo.
           chip('Import schedule from image', _attachImage,
               icon: Icons.photo_library_rounded),
+          // Upload a PDF timetable when the user has no photo.
+          chip('Import schedule from PDF', _attachPdf,
+              icon: Icons.picture_as_pdf_rounded),
           for (final s in _suggestions) chip(s, () => _send(s)),
         ],
       ),
@@ -479,6 +583,39 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 child: Image.memory(m.image!, height: 140, fit: BoxFit.cover),
               ),
             ),
+          if (m.pdfName != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: (isUser ? Colors.white : AppColors.primary)
+                      .withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.picture_as_pdf_rounded,
+                        size: 18,
+                        color: isUser ? Colors.white : AppColors.primary),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        m.pdfName!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: isUser ? Colors.white : null,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           if (m.text.isNotEmpty)
             Text(
               m.text,
@@ -488,6 +625,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
           if (m.schedule != null) _scheduleCard(context, m.schedule!),
+          if (m.hasPendingActions) _confirmDeleteCard(context, m),
         ],
       ),
     );
@@ -553,6 +691,68 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  Widget _confirmDeleteCard(BuildContext context, ChatMessage m) {
+    final theme = Theme.of(context);
+    final summary = m.pendingSummary ?? 'the items you mentioned';
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.danger.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.danger.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded,
+                  size: 18, color: AppColors.danger),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Confirm deletion',
+                    style: theme.textTheme.labelLarge
+                        ?.copyWith(color: AppColors.danger)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'This will permanently delete $summary. This can\u2019t be undone. '
+            'Only continue if you asked for this.',
+            style: theme.textTheme.bodySmall?.copyWith(height: 1.35),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => ref
+                      .read(chatControllerProvider.notifier)
+                      .cancelPendingActions(m),
+                  child: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.danger),
+                  onPressed: () => ref
+                      .read(chatControllerProvider.notifier)
+                      .confirmPendingActions(m),
+                  icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                  label: const Text('Delete'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _imagePreview(ThemeData theme) {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -579,6 +779,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  Widget _pdfPreview(ThemeData theme) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Container(
+            height: 44,
+            width: 44,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.picture_as_pdf_rounded,
+                color: AppColors.primary),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _pendingPdfName ?? 'PDF attached',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close_rounded),
+            onPressed: () => setState(() {
+              _pendingPdf = null;
+              _pendingPdfName = null;
+            }),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _inputBar(ThemeData theme, bool sending) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
@@ -599,9 +839,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.image_outlined),
+                    icon: const Icon(Icons.attach_file_rounded),
                     color: AppColors.primary,
-                    onPressed: sending ? null : _attachImage,
+                    tooltip: 'Attach a photo or PDF',
+                    onPressed: sending ? null : _showAttachMenu,
                   ),
                   Expanded(
                     child: TextField(
