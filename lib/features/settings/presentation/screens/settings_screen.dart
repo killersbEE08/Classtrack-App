@@ -1065,12 +1065,10 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Future<void> _restorePurchases(BuildContext context, WidgetRef ref) async {
-    final ok = await ref.read(subscriptionServiceProvider).restore();
+    final result = await ref.read(subscriptionServiceProvider).restore();
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok
-          ? 'Purchases restored ✅'
-          : 'No previous purchases found for this account.'),
+      content: Text(result.message),
     ));
   }
 

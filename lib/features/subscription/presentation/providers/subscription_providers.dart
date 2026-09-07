@@ -39,15 +39,27 @@ final proStatusProvider =
 
 /// Convenience boolean: is the current user a Pro subscriber?
 ///
-/// True when EITHER RevenueCat reports the entitlement active, OR the
-/// server-trusted `_entitlements/{uid}.pro` flag is set. The latter lets you
-/// grant Pro to any user with a single Firestore toggle (comps, promos,
-/// support), and also keeps real purchases unlocked on the client since the
-/// RevenueCat webhook writes that same flag.
+/// SECURITY: this trusts ONLY the server-maintained `_entitlements/{uid}.pro`
+/// flag — never the on-device RevenueCat state. The RevenueCat SDK's local
+/// `CustomerInfo` reflects the *store account's* (e.g. Google Play) purchase,
+/// which is shared across every ClassTrack/Firebase account signed in on that
+/// device. Trusting it (the old `fromStore || …`) let a user who owns one Pro
+/// subscription unlock Pro on every email by simply switching accounts.
+///
+/// The RevenueCat webhook is the authority: it records the single owning
+/// account per purchase and writes `_entitlements/{uid}.pro = true` for the
+/// owner while explicitly writing `false` for any other account seen on the
+/// same purchase (and revoking transfer targets). Firestore rules make that
+/// flag read-only to clients, so it can't be spoofed. This same flag also
+/// backs manual grants (comps/promos/referral rewards) via a Firestore toggle.
+///
+/// A real purchase unlocks within seconds of the webhook landing, and
+/// [serverProProvider] streams the flag live so expiry/refund/transfer reflect
+/// immediately. The on-device store providers ([proStatusProvider],
+/// [proDetailsProvider]) remain only for the cosmetic Pro-status screen — they
+/// never gate feature access.
 final isProProvider = Provider<bool>((ref) {
-  final fromStore = ref.watch(proStatusProvider);
-  final fromServer = ref.watch(serverProProvider).valueOrNull ?? false;
-  return fromStore || fromServer;
+  return ref.watch(serverProProvider).valueOrNull ?? false;
 });
 
 /// Streams the server-trusted Pro flag at `_entitlements/{uid}`. The user can

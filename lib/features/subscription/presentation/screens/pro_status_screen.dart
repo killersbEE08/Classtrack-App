@@ -30,17 +30,13 @@ class _ProStatusScreenState extends ConsumerState<ProStatusScreen> {
 
   Future<void> _restore() async {
     setState(() => _restoring = true);
-    final ok = await ref.read(subscriptionServiceProvider).restore();
+    final result = await ref.read(subscriptionServiceProvider).restore();
     // Refresh the details snapshot so any newly-restored purchase shows up.
     ref.invalidate(proDetailsProvider);
     if (!mounted) return;
     setState(() => _restoring = false);
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(ok
-            ? 'Purchases restored — Pro is active.'
-            : 'No previous purchases found to restore.'),
-      ),
+      SnackBar(content: Text(result.message)),
     );
   }
 

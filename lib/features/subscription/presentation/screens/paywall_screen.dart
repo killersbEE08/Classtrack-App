@@ -122,14 +122,14 @@ class _PaywallScreenState extends ConsumerState<PaywallScreen> {
       _busy = true;
       _error = null;
     });
-    final ok = await ref.read(subscriptionServiceProvider).restore();
+    final result = await ref.read(subscriptionServiceProvider).restore();
     if (!mounted) return;
-    if (ok) {
+    if (result.isPro) {
       Navigator.of(context).pop(true);
     } else {
       setState(() {
         _busy = false;
-        _error = 'No previous purchases found for this account.';
+        _error = result.message;
       });
     }
   }

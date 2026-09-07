@@ -867,6 +867,17 @@ export const draftResource = onCall(
  * RevenueCat sends the Firebase uid as `app_user_id` (because the app calls
  * Purchases.logIn(uid)). We write `_entitlements/{uid}.pro`, which only this
  * backend can touch — clients can't spoof it.
+ *
+ * ONE PURCHASE = ONE ACCOUNT. A subscription belongs to the account that first
+ * bought it. We record that owner in `_subscriptionOwners/{originalTxnId}` and
+ * only ever grant Pro to them, so restoring the same Google Play purchase under
+ * a different ClassTrack account never unlocks Pro on a second account.
+ *
+ * REQUIRED dashboard setting for this to hold at the store/SDK layer too:
+ *   RevenueCat → Project settings → General →
+ *     "Restore behavior" = "Keep purchases with the original App User ID"
+ *   (block transfers). This makes a cross-account restore fail cleanly on the
+ *   client (receiptAlreadyInUseError) instead of moving the entitlement.
  */
 export const revenueCatWebhook = onRequest(
   { secrets: [REVENUECAT_WEBHOOK_AUTH], cors: false },
@@ -901,11 +912,54 @@ export const revenueCatWebhook = onRequest(
       return;
     }
 
+    const db = getFirestore();
+    // RevenueCat anonymous ids look like "$RCAnonymousID:xxxx" — only real
+    // Firebase UIDs (set via Purchases.logIn(uid)) are ClassTrack accounts.
+    const isRealUid = (id) =>
+      typeof id === "string" && id.length > 0 && !id.startsWith("$RCAnonymousID:");
+
+    // ── TRANSFER ───────────────────────────────────────────────────────────
+    // A ClassTrack Pro subscription belongs to the account that first bought
+    // it — we never move it to a second account (that would give two accounts
+    // Pro for one payment). If the store ever reports a transfer, KEEP Pro on
+    // the original owner(s) and explicitly REVOKE it from the account(s) it was
+    // transferred to. (With RevenueCat's "keep purchases with the original App
+    // User ID" restore behaviour this event shouldn't fire at all — this is a
+    // defensive backstop in case that setting is ever changed.)
+    if (type === "TRANSFER") {
+      const from = (Array.isArray(event.transferred_from)
+        ? event.transferred_from
+        : []).filter(isRealUid);
+      const to = (Array.isArray(event.transferred_to)
+        ? event.transferred_to
+        : []).filter(isRealUid);
+      try {
+        await Promise.all([
+          ...from.map((uid) =>
+            db.collection("_entitlements").doc(uid).set(
+              { pro: true, updatedAt: Date.now(), lastEvent: type },
+              { merge: true }
+            )
+          ),
+          ...to.map((uid) =>
+            db.collection("_entitlements").doc(uid).set(
+              { pro: false, updatedAt: Date.now(), lastEvent: `${type}_BLOCKED` },
+              { merge: true }
+            )
+          ),
+        ]);
+        res.status(200).send("OK");
+      } catch (e) {
+        console.error("Failed to process transfer", e);
+        res.status(500).send("Error");
+      }
+      return;
+    }
+
     // Collect every identifier RevenueCat associates with this customer
     // (current id, original id, and aliases), then keep only the real Firebase
-    // UIDs — RevenueCat anonymous ids start with "$RCAnonymousID:". A purchase
-    // can land on an anonymous id, but the Firebase uid is in the aliases once
-    // the app has called Purchases.logIn(uid), so we write the flag there.
+    // UIDs. A purchase can land on an anonymous id first, but the Firebase uid
+    // appears in the aliases once the app has called Purchases.logIn(uid).
     const candidates = new Set();
     if (typeof event.app_user_id === "string") candidates.add(event.app_user_id);
     if (typeof event.original_app_user_id === "string") {
@@ -916,9 +970,7 @@ export const revenueCatWebhook = onRequest(
         if (typeof a === "string") candidates.add(a);
       }
     }
-    const uids = [...candidates].filter(
-      (id) => id && !id.startsWith("$RCAnonymousID:")
-    );
+    const uids = [...candidates].filter(isRealUid);
 
     // Events that grant Pro vs. events that revoke it. CANCELLATION only turns
     // off auto-renew (access continues until EXPIRATION), so it's ignored here.
@@ -948,17 +1000,125 @@ export const revenueCatWebhook = onRequest(
     }
 
     try {
-      const db = getFirestore();
+      // ── Ownership ────────────────────────────────────────────────────────
+      // Resolve (or, on first sight, record) the single ClassTrack account that
+      // owns this store subscription, keyed by its stable original transaction
+      // id. Pro is only ever granted to this owner, so restoring the same
+      // Google Play purchase under a different account never unlocks Pro there.
+      const purchaseKey =
+        event.original_transaction_id || event.transaction_id || null;
+
+      // Only a GENUINE first purchase may ESTABLISH ownership. This is the
+      // crux of the "second account gets Pro via the same Google Play account"
+      // bug: Google Play ties a subscription to the Google account, and
+      // RevenueCat's default restore behaviour ("Transfer to the new App User
+      // ID") MOVES the entitlement to whichever ClassTrack account logs in on
+      // that device. RevenueCat then rewrites `original_app_user_id` to the new
+      // account and fires follow-up grant events (RENEWAL, PRODUCT_CHANGE,
+      // UNCANCELLATION, …) carrying that second account. If we let those
+      // establish ownership, the second account would be recorded as owner and
+      // unlock Pro. So ownership can ONLY be created by an actual first buy;
+      // every other grant event must find an EXISTING owner or it is denied.
+      const canEstablishOwnership =
+        type === "INITIAL_PURCHASE" || type === "NON_RENEWING_PURCHASE";
+
+      let ownerUid = null;
+      if (purchaseKey) {
+        const ownerRef = db
+          .collection("_subscriptionOwners")
+          .doc(String(purchaseKey));
+        ownerUid = await db.runTransaction(async (tx) => {
+          const snap = await tx.get(ownerRef);
+          if (snap.exists && isRealUid((snap.data() || {}).ownerUid)) {
+            return snap.data().ownerUid; // owner already fixed — never changes
+          }
+          if (!canEstablishOwnership) {
+            // No owner on record and this isn't a first purchase. It may be a
+            // post-transfer renewal for a second account — refuse to attribute
+            // it. (Legit first purchases always arrive as INITIAL_PURCHASE and
+            // create the owner record before any renewal.)
+            return null;
+          }
+          // First time we see this purchase: the original buyer owns it. Prefer
+          // RevenueCat's original_app_user_id, else the first identified uid.
+          const firstOwner = isRealUid(event.original_app_user_id)
+            ? event.original_app_user_id
+            : uids[0];
+          tx.set(
+            ownerRef,
+            {
+              ownerUid: firstOwner,
+              productId: event.product_id || null,
+              store: event.store || null,
+              createdAt: Date.now(),
+            },
+            { merge: true }
+          );
+          return firstOwner;
+        });
+      } else if (canEstablishOwnership) {
+        // No stable purchase key (unusual for subscriptions) but this is a
+        // first purchase, so the sole identified account is the owner.
+        ownerUid = uids[0];
+      }
+
+      const writes = [];
+      if (pro === true && ownerUid === null) {
+        // We could not attribute this grant to a verified owner (see above).
+        // Fail CLOSED: deny Pro to every account on the event so a transferred
+        // Google Play purchase can never unlock Pro on a second account.
+        for (const uid of uids) {
+          writes.push(
+            db.collection("_entitlements").doc(uid).set(
+              { pro: false, updatedAt: Date.now(), lastEvent: `${type}_UNATTRIBUTED` },
+              { merge: true }
+            )
+          );
+        }
+        await Promise.all(writes);
+        console.warn(
+          "revenueCatWebhook: grant event without a verified owner — denied.",
+          { type, uids, purchaseKey }
+        );
+        res.status(200).send("OK");
+        return;
+      }
+      if (pro === true) {
+        // Grant ONLY to the original owner. Any other account seen on this
+        // purchase (a would-be transfer target) is explicitly denied so it can
+        // never ride on someone else's payment.
+        const target = ownerUid;
+        writes.push(
+          db.collection("_entitlements").doc(target).set(
+            { pro: true, updatedAt: Date.now(), lastEvent: type },
+            { merge: true }
+          )
+        );
+        for (const uid of uids) {
+          if (uid !== target) {
+            writes.push(
+              db.collection("_entitlements").doc(uid).set(
+                { pro: false, updatedAt: Date.now(), lastEvent: `${type}_NOT_OWNER` },
+                { merge: true }
+              )
+            );
+          }
+        }
+      } else {
+        // Revoke: turn off the owner and, defensively, every id on the event.
+        const targets = ownerUid ? new Set([ownerUid, ...uids]) : new Set(uids);
+        for (const uid of targets) {
+          writes.push(
+            db.collection("_entitlements").doc(uid).set(
+              { pro: false, updatedAt: Date.now(), lastEvent: type },
+              { merge: true }
+            )
+          );
+        }
+      }
       // merge:true so a manual `proUntil` gift is never clobbered — we only
       // touch the subscription-driven `pro` flag here.
-      await Promise.all(
-        uids.map((uid) =>
-          db
-            .collection("_entitlements")
-            .doc(uid)
-            .set({ pro, updatedAt: Date.now(), lastEvent: type }, { merge: true })
-        )
-      );
+      await Promise.all(writes);
       res.status(200).send("OK");
     } catch (e) {
       console.error("Failed to update entitlement", e);

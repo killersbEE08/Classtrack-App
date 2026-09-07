@@ -185,14 +185,52 @@ class SubscriptionService {
         _ => 'Store',
       };
 
-  /// Restores previous purchases (required by both stores). Returns true when
-  /// a Pro entitlement was found.
-  Future<bool> restore() async {
-    if (!_configured) return false;
+  /// Restores previous purchases (required by both stores).
+  ///
+  /// A ClassTrack Pro subscription is tied to the account that originally
+  /// bought it. If the same Google Play/App Store purchase is restored while
+  /// signed into a *different* ClassTrack account, the store (configured with
+  /// "keep purchases with the original App User ID") refuses to transfer it and
+  /// raises [PurchasesErrorCode.receiptAlreadyInUseError]. We surface that as a
+  /// distinct outcome so the UI can tell the user to sign in with the original
+  /// account or buy a separate subscription for this one — rather than silently
+  /// unlocking Pro on a second account for a single payment.
+  Future<RestoreResult> restore() async {
+    if (!_configured) {
+      return const RestoreResult(
+        RestoreStatus.error,
+        'Subscriptions aren\'t available right now.',
+      );
+    }
     try {
       _onCustomerInfo(await Purchases.restorePurchases());
-    } catch (_) {}
-    return _isPro;
+      if (_isPro) {
+        return const RestoreResult(
+          RestoreStatus.restored,
+          'Purchases restored — Pro is active.',
+        );
+      }
+      return const RestoreResult(
+        RestoreStatus.nothingFound,
+        'No previous purchases found for this account.',
+      );
+    } on PlatformException catch (e) {
+      final code = PurchasesErrorHelper.getErrorCode(e);
+      if (code == PurchasesErrorCode.receiptAlreadyInUseError) {
+        return const RestoreResult(
+          RestoreStatus.linkedToAnotherAccount,
+          'This subscription is already linked to a different ClassTrack '
+          'account. Sign in with that account to use Pro here, or buy a '
+          'separate Pro subscription for this account.',
+        );
+      }
+      return RestoreResult(RestoreStatus.error, _messageFor(code));
+    } catch (_) {
+      return const RestoreResult(
+        RestoreStatus.error,
+        'Couldn\'t restore purchases. Please try again.',
+      );
+    }
   }
 
   String _messageFor(PurchasesErrorCode code) => switch (code) {
@@ -202,8 +240,15 @@ class SubscriptionService {
           'Your payment is pending. Pro unlocks once it clears.',
         PurchasesErrorCode.networkError =>
           'Network error. Check your connection and try again.',
+        // The store account already owns this subscription, but it belongs to
+        // a *different* ClassTrack account. It can't be shared across accounts.
+        PurchasesErrorCode.receiptAlreadyInUseError =>
+          'This Google subscription is linked to a different ClassTrack '
+          'account. Sign in with that account to use Pro, or buy a separate '
+          'subscription for this account.',
+        // This same ClassTrack account already owns Pro on the store.
         PurchasesErrorCode.productAlreadyPurchasedError =>
-          'You already own this — try Restore purchases.',
+          'You already own Pro on this account — try Restore purchases.',
         _ => 'Something went wrong with the purchase. Please try again.',
       };
 
@@ -218,6 +263,34 @@ class SubscriptionException implements Exception {
   const SubscriptionException(this.message);
   @override
   String toString() => message;
+}
+
+/// Outcome of a [SubscriptionService.restore] attempt.
+enum RestoreStatus {
+  /// A Pro entitlement was found and is now active for this account.
+  restored,
+
+  /// The restore succeeded but this account has no purchases to restore.
+  nothingFound,
+
+  /// The store purchase belongs to a *different* ClassTrack account and can't
+  /// be transferred/shared. The user must sign in with the original account or
+  /// buy a separate subscription for this one.
+  linkedToAnotherAccount,
+
+  /// The restore failed (network/store error).
+  error,
+}
+
+/// Result of a restore attempt: a machine-readable [status] plus a ready-to-
+/// show [message].
+class RestoreResult {
+  final RestoreStatus status;
+  final String message;
+  const RestoreResult(this.status, this.message);
+
+  /// True only when Pro is now active for the current account.
+  bool get isPro => status == RestoreStatus.restored;
 }
 
 /// A read-only snapshot of the user's active Pro subscription, surfaced on the
