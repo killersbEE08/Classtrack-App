@@ -25,6 +25,39 @@ Future<void> main() async {
   await runZonedGuarded<Future<void>>(() async {
     WidgetsFlutterBinding.ensureInitialized();
 
+    // ── Never show a blank/grey screen on a widget build error ───────────
+    // In release builds, an exception thrown inside a widget's build() paints
+    // an empty grey box with no message. Replace that with a self-contained,
+    // friendly fallback panel so the user always sees something intelligible
+    // (and can navigate back) instead of a dead blank screen. Kept trivial and
+    // dependency-free so the fallback itself can never throw.
+    ErrorWidget.builder = (FlutterErrorDetails details) {
+      return const Directionality(
+        textDirection: TextDirection.ltr,
+        child: ColoredBox(
+          color: Color(0xFF0B1020),
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.refresh_rounded, color: Colors.white70, size: 40),
+                  SizedBox(height: 12),
+                  Text(
+                    'Something went wrong on this screen.\nPlease go back and try again.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    };
+
     // ── Edge-to-edge display ─────────────────────────────────────────────
     // Android 15+ (targetSdk 35+) enforces edge-to-edge: the app draws behind
     // the status and navigation bars. Opt in explicitly so the layout extends

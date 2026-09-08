@@ -10,6 +10,7 @@ import '../../../../shared/widgets/ui_kit.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../auth/presentation/screens/edit_profile_screen.dart';
 import '../../../cms/domain/marketing.dart';
+import '../../data/resource_repository.dart';
 import '../../domain/resource.dart';
 import '../providers/opportunities_providers.dart';
 import '../widgets/resource_card.dart';
@@ -32,6 +33,15 @@ class DiscountsScreen extends ConsumerStatefulWidget {
 
 class _DiscountsScreenState extends ConsumerState<DiscountsScreen> {
   String? _category; // null = All
+  final _searchCtrl = TextEditingController();
+  String _query = '';
+  bool _searching = false;
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   void _open(Resource r) => Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => ResourceDetailScreen(resource: r)));
@@ -55,13 +65,62 @@ class _DiscountsScreenState extends ConsumerState<DiscountsScreen> {
         title: const Text('Perks'),
         actions: [
           IconButton(
+            icon: Icon(
+                _searching ? Icons.search_off_rounded : Icons.search_rounded),
+            tooltip: 'Search',
+            onPressed: () => setState(() {
+              _searching = !_searching;
+              if (!_searching) {
+                _searchCtrl.clear();
+                _query = '';
+              }
+            }),
+          ),
+          IconButton(
             icon: const Icon(Icons.bookmark_border_rounded),
             tooltip: 'Saved',
             onPressed: _openSaved,
           ),
         ],
       ),
-      body: async.when(
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            if (_searching)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                child: TextField(
+                  controller: _searchCtrl,
+                  autofocus: true,
+                  onChanged: (v) => setState(() => _query = v),
+                  textInputAction: TextInputAction.search,
+                  decoration: InputDecoration(
+                    hintText: 'Search perks & brands',
+                    prefixIcon: const Icon(Icons.search_rounded),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.close_rounded),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        setState(() {
+                          _query = '';
+                          _searching = false;
+                        });
+                      },
+                    ),
+                    filled: true,
+                    fillColor: theme.cardColor,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide.none,
+                    ),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  ),
+                ),
+              ),
+            Expanded(
+              child: async.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => _messageState(
           theme,
@@ -130,9 +189,12 @@ class _DiscountsScreenState extends ConsumerState<DiscountsScreen> {
               .toList()
             ..sort();
 
-          final filtered = _category == null
-              ? perks
-              : perks.where((d) => d.categories.contains(_category)).toList();
+          final filtered = ResourceQueries.search(
+            _category == null
+                ? perks
+                : perks.where((d) => d.categories.contains(_category)).toList(),
+            _query,
+          );
 
           // Featured (carousel) vs the rest (top deals list).
           final featured = filtered.where((d) => d.featured).toList();
@@ -179,6 +241,7 @@ class _DiscountsScreenState extends ConsumerState<DiscountsScreen> {
                   itemBuilder: (_, i) => _FeaturedPerkCard(
                     resource: featuredCarousel[i],
                     accentIndex: i,
+                    country: country,
                     onTap: () => _open(featuredCarousel[i]),
                   ),
                 ),
@@ -205,7 +268,8 @@ class _DiscountsScreenState extends ConsumerState<DiscountsScreen> {
 
           // Lazy list: only visible deal rows (and their image streams) build.
           return ListView.builder(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+            padding: EdgeInsets.fromLTRB(
+                20, 8, 20, 32 + MediaQuery.viewPaddingOf(context).bottom),
             itemCount: header.length + deals.length,
             itemBuilder: (_, i) {
               if (i < header.length) return header[i];
@@ -214,6 +278,10 @@ class _DiscountsScreenState extends ConsumerState<DiscountsScreen> {
             },
           );
         },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -484,11 +552,13 @@ class _CategoryChips extends StatelessWidget {
 class _FeaturedPerkCard extends StatelessWidget {
   final Resource resource;
   final int accentIndex;
+  final String? country;
   final VoidCallback onTap;
   const _FeaturedPerkCard({
     required this.resource,
     required this.accentIndex,
     required this.onTap,
+    this.country,
   });
 
   // Rotating soft palettes to give the carousel visual variety.
@@ -555,9 +625,9 @@ class _FeaturedPerkCard extends StatelessWidget {
                 style: theme.textTheme.titleMedium
                     ?.copyWith(fontWeight: FontWeight.w700, fontSize: 15)),
             const SizedBox(height: 4),
-            if (resource.discountText != null &&
-                resource.discountText!.isNotEmpty)
-              Text(resource.discountText!,
+            if ((resource.effectiveOffer(country).discountText?.isNotEmpty ??
+                false))
+              Text(resource.effectiveOffer(country).discountText!,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.titleMedium?.copyWith(

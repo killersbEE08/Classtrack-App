@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../core/theme/app_colors.dart';
 import '../../../../shared/widgets/ui_kit.dart';
+import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../domain/resource.dart';
 import '../../domain/resource_status.dart';
 import '../providers/opportunities_providers.dart';
@@ -43,14 +44,71 @@ class _ResourceThumbState extends State<ResourceThumb> {
   double? _aspect; // width / height, once the image resolves
   bool _failed = false;
 
-  String? get _url {
+  /// Ordered image sources to try (real brand logo → stored icon → favicon).
+  /// We advance to the next on load error, falling back to a monogram when all
+  /// fail. This replaces generic/unrelated icons with the brand's real logo.
+  List<String> _candidates = const [];
+  int _idx = 0;
+
+  /// The registrable-ish domain from the resource's links, used to fetch a
+  /// real brand logo/favicon (e.g. spotify.com → logo.clearbit.com/spotify.com).
+  String? get _brandDomain {
     final r = widget.resource;
-    final logo = r.logoUrl;
-    final hero = r.imageUrl;
-    final img = widget.preferLogo
+    for (final raw in [r.applicationUrl, r.affiliateUrl, r.officialWebsite]) {
+      final s = raw?.trim() ?? '';
+      if (s.isEmpty) continue;
+      try {
+        final host = Uri.parse(s).host.toLowerCase().replaceFirst('www.', '');
+        if (host.isNotEmpty && host.contains('.')) return host;
+      } catch (_) {/* skip malformed */}
+    }
+    return null;
+  }
+
+  /// Whether [url] is a generic (non-brand) icons8 icon — i.e. an icons8 image
+  /// whose filename doesn't mention the brand/domain (e.g. a "bot" icon on a
+  /// Claude listing). Those are the "unrelated icons" we want to replace.
+  bool _isGenericIcon(String url, String brandName, String? domain) {
+    final u = url.toLowerCase();
+    if (!u.contains('icons8.com')) return false; // uploaded/clearbit/wiki: keep
+    final name = u.split('/').last.split('.').first;
+    final tokens = <String>{
+      ...brandName.toLowerCase().split(RegExp(r'[^a-z0-9]+')),
+      if (domain != null) domain.split('.').first,
+    }..removeWhere((t) => t.length < 3);
+    // Brand-matched icons8 icon (e.g. .../spotify.png) is fine; keep it.
+    return !tokens.any((t) => name.contains(t));
+  }
+
+  /// Builds the ordered list of image URLs to attempt.
+  List<String> _buildCandidates() {
+    final r = widget.resource;
+    final domain = _brandDomain;
+    final logo = r.logoUrl?.trim();
+    final hero = r.imageUrl?.trim();
+    final primary = widget.preferLogo
         ? ((logo != null && logo.isNotEmpty) ? logo : hero)
         : r.displayImage;
-    return (img == null || img.isEmpty) ? null : img;
+
+    final out = <String>[];
+    void add(String? u) {
+      if (u == null || u.isEmpty) return;
+      if (!out.contains(u)) out.add(u);
+    }
+
+    final primaryIsGeneric = primary != null &&
+        _isGenericIcon(primary, r.brandName, domain);
+
+    // Prefer a brand-specific stored image first; if it's a generic icon,
+    // prefer the real brand logo (Clearbit) instead and keep the icon as a
+    // later fallback.
+    if (primary != null && !primaryIsGeneric) add(primary);
+    if (domain != null) add('https://logo.clearbit.com/$domain');
+    add(primary); // generic icon (if any) as a fallback before the favicon
+    if (domain != null) {
+      add('https://www.google.com/s2/favicons?domain=$domain&sz=128');
+    }
+    return out;
   }
 
   @override
@@ -84,11 +142,25 @@ class _ResourceThumbState extends State<ResourceThumb> {
   void _resolve() {
     _detach();
     _provider = null;
-    final url = _url;
-    if (url == null) return;
+    _candidates = _buildCandidates();
+    _idx = 0;
+    if (_candidates.isEmpty) {
+      if (mounted) setState(() => _failed = true);
+      return;
+    }
+    _failed = false;
+    _resolveCurrent();
+  }
 
-    // Decode near display resolution (keeps lists smooth); ResizeImage keeps
-    // the aspect ratio so we can measure it from the delivered frame.
+  /// Resolves the candidate at [_idx]; on error advances to the next source,
+  /// and only shows the monogram once every source has failed.
+  void _resolveCurrent() {
+    _detach();
+    if (_idx >= _candidates.length) {
+      if (mounted) setState(() => _failed = true);
+      return;
+    }
+    final url = _candidates[_idx];
     final dpr = MediaQuery.devicePixelRatioOf(context);
     final target = (widget.size * dpr).round().clamp(48, 512);
     final provider = ResizeImage(NetworkImage(url), width: target);
@@ -101,7 +173,14 @@ class _ResourceThumbState extends State<ResourceThumb> {
         if (mounted) setState(() => _aspect = h == 0 ? 1 : w / h);
       },
       onError: (_, __) {
-        if (mounted) setState(() => _failed = true);
+        // Try the next source (real logo → icon → favicon → monogram).
+        if (!mounted) return;
+        _idx++;
+        if (_idx < _candidates.length) {
+          _resolveCurrent();
+        } else {
+          setState(() => _failed = true);
+        }
       },
     );
     _listener = listener;
@@ -156,7 +235,7 @@ class _ResourceThumbState extends State<ResourceThumb> {
 
     // Show the monogram until the image has resolved (no white flash / no
     // fit-flash), then render with the fit chosen from its true aspect ratio.
-    if (_url == null || _failed || _provider == null || _aspect == null) {
+    if (_candidates.isEmpty || _failed || _provider == null || _aspect == null) {
       return fallback;
     }
 
@@ -235,7 +314,15 @@ class ResourcePill extends StatelessWidget {
 class ResourceCard extends ConsumerWidget {
   final Resource resource;
   final VoidCallback onTap;
-  const ResourceCard({super.key, required this.resource, required this.onTap});
+
+  /// When set (e.g. in the CMS "preview as student"), resolves the discount's
+  /// regional price for this country instead of the signed-in user's profile.
+  final String? previewCountry;
+  const ResourceCard(
+      {super.key,
+      required this.resource,
+      required this.onTap,
+      this.previewCountry});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -252,9 +339,12 @@ class ResourceCard extends ConsumerWidget {
     String? metaLabel;
     Color metaColor = theme.hintColor;
     if (resource.type.isDiscount) {
-      if (resource.discountText != null && resource.discountText!.isNotEmpty) {
+      final country =
+          previewCountry ?? ref.watch(userProfileProvider).valueOrNull?.country;
+      final price = resource.effectiveOffer(country).discountText;
+      if (price != null && price.isNotEmpty) {
         metaIcon = Icons.redeem_rounded;
-        metaLabel = resource.discountText;
+        metaLabel = price;
         metaColor = AppColors.success;
       }
     } else if (status != ResourceStatus.active) {

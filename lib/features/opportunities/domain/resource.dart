@@ -64,6 +64,11 @@ class Resource {
   final String? terms;
   final List<String> categories;
 
+  /// Per-country offer overrides for discounts sold at a different price/link by
+  /// region (e.g. Spotify US $5.99 vs India ₹59). Empty ⇒ everyone sees the
+  /// resource-level [discountText]/[applicationUrl]. Resolved via [effectiveOffer].
+  final List<RegionalOffer> regionalVariants;
+
   // ── Personalisation targeting — PRD §12/§13 ──────────────────────────────
   final List<String> targetDegrees;
   final List<String> targetDepartments;
@@ -133,6 +138,7 @@ class Resource {
     this.affiliateUrl,
     this.terms,
     this.categories = const [],
+    this.regionalVariants = const [],
     this.targetDegrees = const [],
     this.targetDepartments = const [],
     this.targetInterests = const [],
@@ -198,6 +204,29 @@ class Resource {
   String? get displayImage =>
       (imageUrl != null && imageUrl!.isNotEmpty) ? imageUrl : logoUrl;
 
+  /// The effective offer (price text + link + code) for [userCountry], applying
+  /// the first matching [regionalVariants] entry on top of the resource-level
+  /// defaults. Falls back to the defaults when no variant matches — so a country
+  /// without an explicit variant still gets a working offer.
+  ResolvedOffer effectiveOffer([String? userCountry]) {
+    final defaultUrl = affiliateUrl ?? applicationUrl;
+    for (final v in regionalVariants) {
+      if (v.matches(userCountry)) {
+        return ResolvedOffer(
+          discountText: (v.discountText?.isNotEmpty ?? false)
+              ? v.discountText
+              : discountText,
+          url: (v.url?.isNotEmpty ?? false) ? v.url : defaultUrl,
+          discountCode: (v.discountCode?.isNotEmpty ?? false)
+              ? v.discountCode
+              : discountCode,
+        );
+      }
+    }
+    return ResolvedOffer(
+        discountText: discountText, url: defaultUrl, discountCode: discountCode);
+  }
+
   /// Returns a fresh DRAFT copy (no id/slug/timestamps, status reset) — used by
   /// the CMS "Duplicate" action so a new document is created rather than the
   /// original overwritten.
@@ -230,6 +259,7 @@ class Resource {
         affiliateUrl: affiliateUrl,
         terms: terms,
         categories: categories,
+        regionalVariants: regionalVariants,
         targetDegrees: targetDegrees,
         targetDepartments: targetDepartments,
         targetInterests: targetInterests,
@@ -301,6 +331,11 @@ class Resource {
       affiliateUrl: map['affiliateUrl'] as String?,
       terms: clean(map['terms']),
       categories: strList(map['categories']),
+      regionalVariants: (map['regionalVariants'] as List?)
+              ?.whereType<Map>()
+              .map((e) => RegionalOffer.fromMap(e.cast<String, dynamic>()))
+              .toList() ??
+          const [],
       targetDegrees: strList(map['targetDegrees']),
       targetDepartments: strList(map['targetDepartments']),
       targetInterests: strList(map['targetInterests']),
@@ -355,6 +390,7 @@ class Resource {
         'affiliateUrl': affiliateUrl,
         'terms': terms,
         'categories': categories,
+        'regionalVariants': regionalVariants.map((v) => v.toMap()).toList(),
         'targetDegrees': targetDegrees,
         'targetDepartments': targetDepartments,
         'targetInterests': targetInterests,
@@ -417,4 +453,66 @@ class UrlHealth {
     });
     return out;
   }
+}
+
+
+/// A country-specific override of a discount's price text and/or link. When the
+/// signed-in student's profile country matches [countries], the app shows this
+/// variant instead of the resource-level defaults (see [Resource.effectiveOffer]).
+///
+/// Any field left null/empty falls back to the resource-level value, so a
+/// variant can override just the price, just the link, or both.
+class RegionalOffer {
+  /// Countries this variant applies to (matched against the user's profile
+  /// country, case-insensitive).
+  final List<String> countries;
+
+  /// Region-specific price/offer text, e.g. "₹59/mo" (overrides discountText).
+  final String? discountText;
+
+  /// Region-specific redemption link (overrides affiliateUrl/applicationUrl).
+  final String? url;
+
+  /// Optional region-specific promo code.
+  final String? discountCode;
+
+  const RegionalOffer({
+    this.countries = const [],
+    this.discountText,
+    this.url,
+    this.discountCode,
+  });
+
+  /// Whether this variant targets [country] (case-insensitive).
+  bool matches(String? country) {
+    if (country == null || country.isEmpty) return false;
+    return countries.any((c) => c.toLowerCase() == country.toLowerCase());
+  }
+
+  factory RegionalOffer.fromMap(Map<String, dynamic> m) => RegionalOffer(
+        countries: (m['countries'] as List?)
+                ?.map((e) => e.toString())
+                .where((e) => e.isNotEmpty)
+                .toList() ??
+            const [],
+        discountText: m['discountText'] as String?,
+        url: m['url'] as String?,
+        discountCode: m['discountCode'] as String?,
+      );
+
+  Map<String, dynamic> toMap() => {
+        'countries': countries,
+        'discountText': discountText,
+        'url': url,
+        'discountCode': discountCode,
+      };
+}
+
+/// The resolved offer (price text + link + code) for a given user country,
+/// returned by [Resource.effectiveOffer].
+class ResolvedOffer {
+  final String? discountText;
+  final String? url;
+  final String? discountCode;
+  const ResolvedOffer({this.discountText, this.url, this.discountCode});
 }

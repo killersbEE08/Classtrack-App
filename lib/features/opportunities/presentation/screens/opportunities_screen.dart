@@ -169,6 +169,9 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
     final async = ref.watch(visibleResourcesProvider);
     final country = ref.watch(userProfileProvider).valueOrNull?.country;
     final hidden = ref.watch(hiddenResourceIdsProvider).valueOrNull ?? const {};
+    // Clearance so the last card is never hidden behind the floating bottom
+    // nav bar + FAB (larger on devices with a 3-button system nav).
+    final bottomClear = 120.0 + MediaQuery.viewPaddingOf(context).bottom;
 
     return Scaffold(
       appBar: AppBar(
@@ -188,6 +191,29 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
             }),
           ),
           IconButton(
+            icon: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                const Icon(Icons.tune_rounded),
+                if (_remoteOnly || _paidOnly || _verifiedOnly)
+                  Positioned(
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      width: 9,
+                      height: 9,
+                      decoration: const BoxDecoration(
+                        color: AppColors.accent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            tooltip: 'Filters',
+            onPressed: _openFilterSheet,
+          ),
+          IconButton(
             icon: const Icon(Icons.card_giftcard_outlined),
             tooltip: 'Perks',
             onPressed: () => Navigator.of(
@@ -204,29 +230,6 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
             ),
           ),
         ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: AppColors.primary,
-        onPressed: _openFilterSheet,
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            const Icon(Icons.tune_rounded, color: Colors.white),
-            if (_remoteOnly || _paidOnly || _verifiedOnly)
-              Positioned(
-                right: -2,
-                top: -2,
-                child: Container(
-                  width: 10,
-                  height: 10,
-                  decoration: const BoxDecoration(
-                    color: AppColors.accent,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-          ],
-        ),
       ),
       body: SafeArea(
         bottom: false,
@@ -406,11 +409,11 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
                               // Lazy list: only visible cards (and their image
                               // streams) are built, keeping scroll smooth.
                               return ListView.builder(
-                                padding: const EdgeInsets.fromLTRB(
+                                padding: EdgeInsets.fromLTRB(
                                   20,
                                   4,
                                   20,
-                                  120,
+                                  bottomClear,
                                 ),
                                 itemCount: header.length + list.length,
                                 itemBuilder: (_, i) {
@@ -490,7 +493,8 @@ class _OpportunitiesScreenState extends ConsumerState<OpportunitiesScreen> {
         ref.watch(userProfileProvider).valueOrNull?.hasAnyProfileDetails ??
         false;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 24, 20, 120),
+      padding: EdgeInsets.fromLTRB(
+          20, 24, 20, 120 + MediaQuery.viewPaddingOf(context).bottom),
       children: [
         Container(
           padding: const EdgeInsets.all(24),
@@ -823,26 +827,55 @@ class _OpportunityCard extends ConsumerWidget {
     final saved = ref.watch(savedResourceIdsProvider).valueOrNull ?? const {};
     final isSaved = saved.contains(resource.id);
     final match = ref.watch(resourceScoreProvider(resource));
-    final highMatch = match.personalized && match.score >= 85;
 
     final published = resource.publishedAt ?? resource.createdAt;
     final isNew =
         published != null && DateTime.now().difference(published).inDays <= 14;
     final showMatch = match.personalized && match.score >= 40;
 
+    // Compact, single inline meta line — only the bits that actually exist, so
+    // the card never reserves empty space.
+    final metaBits = <Widget>[
+      if (resource.deadline != null)
+        _MetaBit(
+            icon: Icons.event_rounded,
+            label: 'By ${DateUtilsX.prettyDate(resource.deadline!)}',
+            color: theme.hintColor),
+      if (resource.paid == true)
+        const _MetaBit(
+            icon: Icons.payments_rounded,
+            label: 'Paid',
+            color: AppColors.success),
+      if (showMatch)
+        _MetaBit(
+            icon: Icons.auto_awesome_rounded,
+            label: '${match.score}% match',
+            color: AppColors.success)
+      else if (isNew)
+        const _MetaBit(
+            icon: Icons.fiber_manual_record,
+            label: 'Newly added',
+            color: AppColors.info),
+      if (resource.sponsored)
+        const _MetaBit(
+            icon: Icons.star_rounded,
+            label: 'Sponsored',
+            color: AppColors.accent),
+    ];
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(14),
-        decoration: softCard(context, radius: 20),
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(12),
+        decoration: softCard(context, radius: 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ResourceThumb(resource: resource, size: 46, preferLogo: true),
+                ResourceThumb(resource: resource, size: 44, preferLogo: true),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
@@ -858,12 +891,6 @@ class _OpportunityCard extends ConsumerWidget {
                             color: resource.type.color,
                             icon: resource.type.icon,
                           ),
-                          if (highMatch)
-                            const ResourcePill(
-                              label: 'High match',
-                              color: AppColors.accent,
-                              icon: Icons.star_rounded,
-                            ),
                           if (resource.verified)
                             const Icon(
                               Icons.verified_rounded,
@@ -872,7 +899,7 @@ class _OpportunityCard extends ConsumerWidget {
                             ),
                         ],
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       Text(
                         resource.title,
                         maxLines: 2,
@@ -897,100 +924,16 @@ class _OpportunityCard extends ConsumerWidget {
                 _SaveIcon(resource: resource, isSaved: isSaved, saved: saved),
               ],
             ),
-            const SizedBox(height: 12),
-            _MetaStrip(
-              items: [
-                if (resource.deadline != null)
-                  (
-                    Icons.event_rounded,
-                    'Apply by',
-                    DateUtilsX.prettyDate(resource.deadline!),
-                  ),
-                if (resource.paid == true)
-                  (Icons.payments_rounded, 'Stipend', 'Paid'),
-              ],
-            ),
-            if (showMatch || resource.sponsored || highMatch || isNew) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  if (showMatch)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.success.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(
-                            Icons.auto_awesome_rounded,
-                            size: 12,
-                            color: AppColors.success,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '${match.score}% match',
-                            style: theme.textTheme.labelMedium?.copyWith(
-                              color: AppColors.success,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  const Spacer(),
-                  if (resource.sponsored)
-                    Text(
-                      'Sponsored',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: AppColors.accent,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    )
-                  else if (highMatch)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'Popular',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: AppColors.success,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 3),
-                        const Icon(
-                          Icons.trending_up_rounded,
-                          size: 14,
-                          color: AppColors.success,
-                        ),
-                      ],
-                    )
-                  else if (isNew)
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'Newly added',
-                          style: theme.textTheme.labelMedium?.copyWith(
-                            color: AppColors.info,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(width: 4),
-                        const Icon(
-                          Icons.fiber_manual_record,
-                          size: 8,
-                          color: AppColors.info,
-                        ),
-                      ],
-                    ),
-                ],
+            if (metaBits.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.only(left: 56),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 6,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: metaBits,
+                ),
               ),
             ],
           ],
@@ -1000,76 +943,31 @@ class _OpportunityCard extends ConsumerWidget {
   }
 }
 
-/// A divided row of label-over-value meta groups (Apply by / Stipend /
-/// Location), rendered inside a soft tinted strip.
-class _MetaStrip extends StatelessWidget {
-  final List<(IconData, String, String)> items;
-  const _MetaStrip({required this.items});
+/// A tiny inline meta item: a small icon + label. Keeps opportunity cards
+/// compact — no boxed strips or reserved rows, so short listings stay short.
+class _MetaBit extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  const _MetaBit(
+      {required this.icon, required this.label, required this.color});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    if (items.isEmpty) return const SizedBox.shrink();
-    final children = <Widget>[];
-    for (var i = 0; i < items.length; i++) {
-      final (icon, label, value) = items[i];
-      children.add(
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(icon, size: 12, color: theme.hintColor),
-                  const SizedBox(width: 4),
-                  Flexible(
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.hintColor,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 3),
-              Text(
-                value,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.labelMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: color,
+            fontWeight: FontWeight.w600,
           ),
         ),
-      );
-      if (i != items.length - 1) {
-        children.add(
-          Container(
-            width: 1,
-            height: 30,
-            margin: const EdgeInsets.symmetric(horizontal: 10),
-            color: theme.dividerColor,
-          ),
-        );
-      }
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: theme.brightness == Brightness.dark
-            ? AppColors.darkSurfaceAlt
-            : AppColors.lavenderSoft,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: children,
-      ),
+      ],
     );
   }
 }

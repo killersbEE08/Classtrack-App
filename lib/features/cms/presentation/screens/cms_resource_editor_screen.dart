@@ -52,6 +52,9 @@ class _CmsResourceEditorScreenState
   bool _aiDrafting = false;
   final TextEditingController _catInput = TextEditingController();
 
+  /// Editable per-country offer variants (price + link overrides).
+  final List<_RegionalDraft> _regional = [];
+
   /// Signature of the form at load; compared against the live signature to
   /// detect unsaved edits (drives the discard-changes guard).
   late final String _initialSig;
@@ -93,7 +96,6 @@ class _CmsResourceEditorScreenState
         'requirements',
         'discountCode',
         'discountPercent',
-        'redemptionUrl',
         'relatedIds',
       ])
         k: TextEditingController(),
@@ -139,12 +141,14 @@ class _CmsResourceEditorScreenState
       _c['discountCode']!.text = r.discountCode ?? '';
       _c['discountPercent']!.text =
           r.discountPercent?.toString() ?? '';
-      _c['redemptionUrl']!.text = r.redemptionUrl ?? '';
       _c['relatedIds']!.text = r.relatedResourceIds.join(', ');
       _homepageEligible = r.homepageEligible;
       _recommendationEligible = r.recommendationEligible;
       _scheduledPublishAt = r.scheduledPublishAt;
       _scheduledUnpublishAt = r.scheduledUnpublishAt;
+      for (final v in r.regionalVariants) {
+        _regional.add(_RegionalDraft.fromOffer(v));
+      }
     }
     _initialSig = _signature();
   }
@@ -153,6 +157,9 @@ class _CmsResourceEditorScreenState
   void dispose() {
     for (final c in _c.values) {
       c.dispose();
+    }
+    for (final d in _regional) {
+      d.dispose();
     }
     _catInput.dispose();
     super.dispose();
@@ -175,6 +182,9 @@ class _CmsResourceEditorScreenState
         'sched=${_scheduledPublishAt?.toIso8601String()}/${_scheduledUnpublishAt?.toIso8601String()};');
     b.write(
         'flags=$_featured$_sponsored$_verified$_remote$_paid$_verificationRequired$_homepageEligible$_recommendationEligible');
+    for (final d in _regional) {
+      b.write('|rv=${d.signature()}');
+    }
     return b.toString();
   }
 
@@ -258,7 +268,14 @@ class _CmsResourceEditorScreenState
       requirements: _nullIf(_c['requirements']!.text),
       discountCode: _nullIf(_c['discountCode']!.text),
       discountPercent: num.tryParse(_c['discountPercent']!.text.trim()),
-      redemptionUrl: _nullIf(_c['redemptionUrl']!.text),
+      // redemptionUrl field was removed from the editor (duplicate of the
+      // "Deal / redemption link" affiliateUrl field). Preserve any stored value.
+      redemptionUrl: existing?.redemptionUrl,
+      // regionalVariants are managed by the Regional offers editor below.
+      regionalVariants: _regional
+          .map((d) => d.toOffer())
+          .where((o) => o.countries.isNotEmpty)
+          .toList(),
       scheduledPublishAt: _scheduledPublishAt,
       scheduledUnpublishAt: _scheduledUnpublishAt,
       homepageEligible: _homepageEligible,
@@ -485,7 +502,6 @@ class _CmsResourceEditorScreenState
       setText('discountText', d['discountText']);
       setText('discountCode', d['discountCode']);
       setText('redemptionInstructions', d['redemptionInstructions']);
-      setText('redemptionUrl', d['redemptionUrl']);
       setText('terms', d['terms']);
       final pct = d['discountPercent'];
       if (pct is num) _c['discountPercent']!.text = pct.toString();
@@ -838,7 +854,6 @@ class _CmsResourceEditorScreenState
                     _field('discountCode', 'Discount code'),
                     _field('discountPercent', 'Discount value / percent',
                         number: true),
-                    _field('redemptionUrl', 'Redemption URL'),
                     _field('redemptionInstructions', 'How to redeem',
                         maxLines: 3),
                     _field('terms', 'Terms', maxLines: 3),
@@ -847,6 +862,7 @@ class _CmsResourceEditorScreenState
                         'Partner handles eligibility verification',
                         _verificationRequired,
                         (v) => setState(() => _verificationRequired = v)),
+                    _regionalEditor(theme),
                   ]),
               ],
             ),
@@ -1132,6 +1148,94 @@ class _CmsResourceEditorScreenState
       ),
     );
   }
+
+  /// Editor for per-country offer variants (price + link overrides). Leave the
+  /// resource-level headline/link as the default; add a row per country that
+  /// prices/links differently (e.g. Spotify India ₹59 vs US $5.99).
+  Widget _regionalEditor(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.public_rounded,
+                  size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Text('Regional offers (per country)',
+                  style: theme.textTheme.labelLarge
+                      ?.copyWith(fontWeight: FontWeight.w700)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Optional. Each row overrides the price and/or link for one or more '
+            'countries (comma-separated). Countries without a row see the '
+            'default headline/link above.',
+            style: theme.textTheme.bodySmall?.copyWith(color: theme.hintColor),
+          ),
+          const SizedBox(height: 10),
+          for (var i = 0; i < _regional.length; i++)
+            Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.fromLTRB(12, 8, 8, 12),
+              decoration: BoxDecoration(
+                color: theme.scaffoldBackgroundColor,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: theme.dividerColor, width: 1.2),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _regional[i].countries,
+                          decoration: const InputDecoration(
+                              labelText: 'Country(ies), comma-separated',
+                              isDense: true),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Remove region',
+                        icon: const Icon(Icons.delete_outline_rounded,
+                            color: AppColors.danger),
+                        onPressed: () => setState(() {
+                          _regional.removeAt(i).dispose();
+                        }),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _regional[i].price,
+                    decoration: const InputDecoration(
+                        labelText: 'Price / headline for this region (e.g. ₹59/mo)',
+                        isDense: true),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _regional[i].url,
+                    decoration: const InputDecoration(
+                        labelText: 'Link for this region (optional)',
+                        isDense: true),
+                  ),
+                ],
+              ),
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => setState(() => _regional.add(_RegionalDraft())),
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('Add region'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 
@@ -1342,5 +1446,42 @@ class _CategoryChip extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+
+/// Mutable editor row backing a [RegionalOffer] (per-country price/link).
+class _RegionalDraft {
+  final TextEditingController countries;
+  final TextEditingController price;
+  final TextEditingController url;
+
+  _RegionalDraft({String countries = '', String price = '', String url = ''})
+      : countries = TextEditingController(text: countries),
+        price = TextEditingController(text: price),
+        url = TextEditingController(text: url);
+
+  factory _RegionalDraft.fromOffer(RegionalOffer o) => _RegionalDraft(
+        countries: o.countries.join(', '),
+        price: o.discountText ?? '',
+        url: o.url ?? '',
+      );
+
+  RegionalOffer toOffer() => RegionalOffer(
+        countries: countries.text
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList(),
+        discountText: price.text.trim().isEmpty ? null : price.text.trim(),
+        url: url.text.trim().isEmpty ? null : url.text.trim(),
+      );
+
+  String signature() => '${countries.text}|${price.text}|${url.text}';
+
+  void dispose() {
+    countries.dispose();
+    price.dispose();
+    url.dispose();
   }
 }

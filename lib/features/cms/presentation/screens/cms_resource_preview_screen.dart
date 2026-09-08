@@ -62,7 +62,7 @@ class _CmsResourcePreviewScreenState
           // the signed-in admin's profile; the profile-accurate match for the
           // previewed audience is shown in the summary above.
           AbsorbPointer(
-            child: ResourceCard(resource: r, onTap: () {}),
+            child: ResourceCard(resource: r, onTap: () {}, previewCountry: _country),
           ),
           const SizedBox(height: 20),
           Text('DETAIL PAGE',
@@ -148,33 +148,39 @@ class _CmsResourcePreviewScreenState
                   onChanged: (v) => setState(() => _country = v),
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: DropdownButtonFormField<int>(
-                  initialValue: _year,
-                  decoration: const InputDecoration(labelText: 'Year'),
-                  items: [
-                    for (var y = 1; y <= 5; y++)
-                      DropdownMenuItem(value: y, child: Text('Year $y')),
-                  ],
-                  onChanged: (v) => setState(() => _year = v),
+              // Year only affects opportunity personalisation, not discounts.
+              if (!r.type.isDiscount) ...[
+                const SizedBox(width: 12),
+                Expanded(
+                  child: DropdownButtonFormField<int>(
+                    initialValue: _year,
+                    decoration: const InputDecoration(labelText: 'Year'),
+                    items: [
+                      for (var y = 1; y <= 5; y++)
+                        DropdownMenuItem(value: y, child: Text('Year $y')),
+                    ],
+                    onChanged: (v) => setState(() => _year = v),
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
-          const SizedBox(height: 14),
-          Text('Interests', style: theme.textTheme.labelLarge),
-          const SizedBox(height: 8),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final i in ProfileOptions.interests)
-                _chip(i, _interests.contains(i), () => setState(() {
-                      if (!_interests.remove(i)) _interests.add(i);
-                    })),
-            ],
-          ),
+          // Interests only affect opportunity matching, not discounts.
+          if (!r.type.isDiscount) ...[
+            const SizedBox(height: 14),
+            Text('Interests', style: theme.textTheme.labelLarge),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final i in ProfileOptions.interests)
+                  _chip(i, _interests.contains(i), () => setState(() {
+                        if (!_interests.remove(i)) _interests.add(i);
+                      })),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -240,6 +246,7 @@ class _CmsResourcePreviewScreenState
             if (r.sponsored)
               const ResourcePill(label: 'Sponsored', color: AppColors.accent),
           ]),
+          if (isDiscount) _regionalOfferPreview(theme),
           if (r.description.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(r.description, style: theme.textTheme.bodyMedium),
@@ -256,6 +263,57 @@ class _CmsResourcePreviewScreenState
             label: Text(cta),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Shows the discount's country-resolved price + redemption link for the
+  /// currently-selected preview country (drives home the regional-variant
+  /// behaviour: change the Country dropdown to see US vs India vs UK).
+  Widget _regionalOfferPreview(ThemeData theme) {
+    final offer = r.effectiveOffer(_country);
+    final usesVariant =
+        r.regionalVariants.any((v) => v.matches(_country));
+    final price = offer.discountText;
+    final link = offer.url;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.public_rounded,
+                    size: 16, color: AppColors.primary),
+                const SizedBox(width: 6),
+                Text(
+                  'Offer for ${_country ?? "Any country"}'
+                  '${usesVariant ? "" : " (default)"}',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                      color: AppColors.primary, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(price?.isNotEmpty == true ? price! : 'No price set',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(link?.isNotEmpty == true ? link! : 'No link set',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: theme.hintColor)),
+          ],
+        ),
       ),
     );
   }

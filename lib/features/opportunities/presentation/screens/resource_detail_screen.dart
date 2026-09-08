@@ -8,6 +8,7 @@ import '../../../../core/utils/url_launcher_util.dart';
 import '../../../../services/analytics_service.dart';
 import '../../../../services/metrics_service.dart';
 import '../../../../shared/widgets/ui_kit.dart';
+import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../../cms/domain/content_report.dart';
 import '../../../cms/presentation/providers/report_providers.dart';
 import '../../data/resource_repository.dart';
@@ -45,8 +46,11 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
   Future<void> _open() async {
     // Safety net: never open the link while the resource is "Opening soon".
     if (r.effectiveStatus == ResourceStatus.openingSoon) return;
+    // Discounts resolve to the viewer's country-specific link when one exists.
+    final country = ref.read(userProfileProvider).valueOrNull?.country;
+    final resolved = r.effectiveOffer(country);
     final url = r.type.isDiscount
-        ? (r.affiliateUrl ?? r.applicationUrl)
+        ? (resolved.url ?? r.affiliateUrl ?? r.applicationUrl)
         : (r.applicationUrl ?? r.affiliateUrl);
     ref.read(analyticsProvider).log(
       r.type.isDiscount ? 'discount_clicked' : 'opportunity_clicked',
@@ -142,6 +146,8 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
     final related = _related(ref);
     final isDiscount = r.type.isDiscount;
     final match = ref.watch(resourceScoreProvider(r));
+    final resolvedOffer =
+        r.effectiveOffer(ref.watch(userProfileProvider).valueOrNull?.country);
 
     return Scaffold(
       appBar: AppBar(
@@ -232,8 +238,8 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
             ],
           ),
           const SizedBox(height: 16),
-          if (isDiscount && r.discountText != null && r.discountText!.isNotEmpty)
-            _discountBanner(theme),
+          if (isDiscount && (resolvedOffer.discountText?.isNotEmpty ?? false))
+            _discountBanner(theme, resolvedOffer.discountText!),
           if (r.deadline != null) _deadlineCard(theme),
           if (r.description.isNotEmpty) ...[
             const SizedBox(height: 16),
@@ -349,7 +355,7 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
     );
   }
 
-  Widget _discountBanner(ThemeData theme) {
+  Widget _discountBanner(ThemeData theme, String text) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
@@ -367,7 +373,7 @@ class _ResourceDetailScreenState extends ConsumerState<ResourceDetailScreen> {
           const Text('Student offer',
               style: TextStyle(color: Colors.white70, fontSize: 12)),
           const SizedBox(height: 4),
-          Text(r.discountText!,
+          Text(text,
               style: theme.textTheme.headlineSmall?.copyWith(
                   color: Colors.white, fontWeight: FontWeight.w800)),
         ],
