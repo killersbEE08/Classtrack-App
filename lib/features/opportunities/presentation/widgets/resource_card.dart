@@ -381,7 +381,7 @@ class ResourceCard extends ConsumerWidget {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ResourceThumb(resource: resource, size: 60),
+            ResourceThumb(resource: resource, size: 60, preferLogo: true),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
