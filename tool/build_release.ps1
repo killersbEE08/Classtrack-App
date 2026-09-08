@@ -76,17 +76,27 @@ if (-not [string]::IsNullOrWhiteSpace($IosKey)) {
     $defines += "--dart-define=REVENUECAT_IOS_KEY=$IosKey"
 }
 
+# Dart-level obfuscation + debug-info stripping. Renames Dart symbols inside
+# libapp.so (improves Play Console's "Obfuscation" score for Flutter apps) and
+# writes the symbol map to build/debug-info so crash traces can be de-obfuscated
+# later (keep this folder for each release you ship). Native R8/shrink/optimize
+# is already enabled in android/app/build.gradle.kts.
+$obfuscate = @(
+    "--obfuscate",
+    "--split-debug-info=build/debug-info"
+)
+
 if ($Ios) {
-    Write-Host "==> flutter build ipa (release)" -ForegroundColor Cyan
-    flutter build ipa --release @defines
+    Write-Host "==> flutter build ipa (release, obfuscated)" -ForegroundColor Cyan
+    flutter build ipa --release @defines @obfuscate
 }
 elseif ($Apk) {
-    Write-Host "==> flutter build apk (release)" -ForegroundColor Cyan
-    flutter build apk --release @defines
+    Write-Host "==> flutter build apk (release, obfuscated)" -ForegroundColor Cyan
+    flutter build apk --release @defines @obfuscate
 }
 else {
-    Write-Host "==> flutter build appbundle (release)" -ForegroundColor Cyan
-    flutter build appbundle --release @defines
+    Write-Host "==> flutter build appbundle (release, obfuscated)" -ForegroundColor Cyan
+    flutter build appbundle --release @defines @obfuscate
 }
 if ($LASTEXITCODE -ne 0) { Fail "flutter build failed." }
 
